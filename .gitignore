@@ -1,0 +1,42 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+.venv
+
+# Data caches (too large for git, kept locally + backed up to external)
+cache/*.parquet
+cache/*.csv
+cache/*.json
+
+# Results
+results/*.json
+results/*.csv
+
+# Backups
+backups/
+*.zip
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Environment
+.env
+*.local
+
+# Logs
+*.log
+logs/
