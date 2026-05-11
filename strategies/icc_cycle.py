@@ -97,8 +97,10 @@ class TradeMode(Enum):
 
 
 class ExitReason(Enum):
-    SL_HIT = "SL_HIT"
-    TP_HIT = "TP_HIT"
+    SL_HIT = "SL_HIT"               # Initial SL hit (true loss)
+    TRAILING_HIT = "TRAILING_HIT"   # Trailing SL hit AFTER it moved past initial (profit/breakeven exit)
+    TP_HIT = "TP_HIT"               # Full TP reached (or partial closed and final exit)
+    PARTIAL_TP_HIT = "PARTIAL_TP_HIT"  # 85% closed at TP, 15% still running with trailing
     DAILY_REVERSAL = "DAILY_REVERSAL"
     H4_REVERSAL = "H4_REVERSAL"
     OB_BROKEN = "OB_BROKEN"
@@ -150,6 +152,9 @@ class TradeSetup:
     # Lifecycle
     partial_closed: bool = False
     partial_closed_at_bar: Optional[int] = None
+    partial_close_price: Optional[float] = None   # price at which 85% was closed
+    partial_pnl_pct: Optional[float] = None       # PnL of the 85% portion
+    remaining_size: float = 1.0                   # 1.0 → 0.15 after partial
     exit_bar: Optional[int] = None
     exit_price: Optional[float] = None
     exit_timestamp: Optional[pd.Timestamp] = None
@@ -594,30 +599,69 @@ def _monitor_in_trade(
     current_low: float,
     current_ts: pd.Timestamp,
 ):
-    """Monitor an open trade: check SL hit, TP hit, update trailing SL."""
-    # SL hit?
+    """
+    Monitor an open trade: check SL hit, TP hit, update trailing SL.
+
+    SL exit semantics:
+        - If sl_current == sl_initial   → SL_HIT (true loss, initial SL never moved)
+        - If sl_current != sl_initial   → TRAILING_HIT (trailing SL moved, exit may be profit/BE/small loss)
+
+    Partial close logic (per ICC spec):
+        - First time price touches tp_target → close 85%, mark partial_closed
+        - Remaining 15% continues with trailing SL
+        - Final exit (trailing hit, daily reversal etc.) closes the 15%
+        - Total PnL = 0.85 * partial_pnl + 0.15 * final_pnl
+    """
+
+    def _sl_exit_reason() -> ExitReason:
+        """Determine if this is a true SL_HIT or a TRAILING_HIT."""
+        # Trailing has moved if sl_current differs from sl_initial
+        if setup.sl_initial is None:
+            return ExitReason.SL_HIT
+        # Use small tolerance for floating point equality
+        if abs(setup.sl_current - setup.sl_initial) > 1e-9:
+            return ExitReason.TRAILING_HIT
+        return ExitReason.SL_HIT
+
+    # ── SL hit ? ──
     if setup.direction == Direction.BUY:
         if current_low <= setup.sl_current:
-            _close_setup(setup, h1_bar, setup.sl_current, current_ts, ExitReason.SL_HIT)
-            return
-        # TP hit?
-        if current_high >= setup.tp_target and not setup.partial_closed:
-            setup.partial_closed = True
-            setup.partial_closed_at_bar = h1_bar
-            # 85% closed, 15% continues with trailing — for v1, we close 100% at TP
-            _close_setup(setup, h1_bar, setup.tp_target, current_ts, ExitReason.TP_HIT)
+            _close_setup(setup, h1_bar, setup.sl_current, current_ts, _sl_exit_reason())
             return
     else:  # SELL
         if current_high >= setup.sl_current:
-            _close_setup(setup, h1_bar, setup.sl_current, current_ts, ExitReason.SL_HIT)
+            _close_setup(setup, h1_bar, setup.sl_current, current_ts, _sl_exit_reason())
             return
-        if current_low <= setup.tp_target and not setup.partial_closed:
-            setup.partial_closed = True
-            setup.partial_closed_at_bar = h1_bar
-            _close_setup(setup, h1_bar, setup.tp_target, current_ts, ExitReason.TP_HIT)
-            return
-    
-    # Trailing SL: structural — follow new HL (BUY) / LH (SELL)
+
+    # ── TP hit ? ──
+    tp_hit_now = False
+    if setup.direction == Direction.BUY and current_high >= setup.tp_target:
+        tp_hit_now = True
+    elif setup.direction == Direction.SELL and current_low <= setup.tp_target:
+        tp_hit_now = True
+
+    if tp_hit_now and not setup.partial_closed:
+        # PARTIAL CLOSE: 85% locked in at TP, 15% continues with trailing
+        setup.partial_closed = True
+        setup.partial_closed_at_bar = h1_bar
+        setup.partial_close_price = setup.tp_target
+
+        if setup.direction == Direction.BUY:
+            setup.partial_pnl_pct = (setup.tp_target - setup.entry_price) / setup.entry_price
+        else:
+            setup.partial_pnl_pct = (setup.entry_price - setup.tp_target) / setup.entry_price
+
+        setup.remaining_size = 0.15
+
+        # Move SL to entry+small buffer in the favorable direction is NOT done
+        # (TradesSAI rule: no break-even). The remaining 15% keeps the structural trailing SL.
+        # The trailing SL will naturally protect profits as new HL/LH form.
+
+        # Note: we do NOT close the setup here. State stays IN_TRADE.
+        # The remaining 15% will exit later via trailing/reversal/etc.
+        # We just track the partial event.
+
+    # ── Trailing SL: structural — follow new HL (BUY) / LH (SELL) ──
     target_type = 'HL' if setup.direction == Direction.BUY else 'LH'
     for s in reversed(h1_structs):
         if s.confirmed_at_bar > h1_bar:
@@ -625,7 +669,6 @@ def _monitor_in_trade(
         if s.confirmed_at_bar <= setup.entry_bar:
             break
         if s.type == target_type:
-            # Found a new structural level — move SL there if it's a better (higher for BUY) level
             new_sl_candidate = s.price * (0.999 if setup.direction == Direction.BUY else 1.001)
             if setup.direction == Direction.BUY and new_sl_candidate > setup.sl_current:
                 setup.sl_current = new_sl_candidate
@@ -643,19 +686,36 @@ def _close_setup(
     exit_ts: pd.Timestamp,
     reason: ExitReason,
 ):
-    """Close a setup (whether in trade or pre-entry)."""
+    """
+    Close a setup (whether in trade or pre-entry).
+
+    PnL computation:
+        - No partial: pnl_pct = simple entry→exit return
+        - Partial done: pnl_pct = 0.85 * partial_pnl + 0.15 * remaining_pnl
+                        (weighted by sizes per ICC partial close logic)
+    """
     setup.state = TradeState.COOLDOWN
     setup.exit_bar = h1_bar
     setup.exit_price = exit_price
     setup.exit_timestamp = exit_ts
     setup.exit_reason = reason
-    
-    # Compute PnL if was in trade
-    if setup.entry_price is not None:
-        if setup.direction == Direction.BUY:
-            setup.pnl_pct = (exit_price - setup.entry_price) / setup.entry_price
-        else:
-            setup.pnl_pct = (setup.entry_price - exit_price) / setup.entry_price
+
+    if setup.entry_price is None:
+        # Closed before entry → no PnL
+        return
+
+    # Compute PnL of the remaining (or full) portion at this final exit
+    if setup.direction == Direction.BUY:
+        final_leg_pnl = (exit_price - setup.entry_price) / setup.entry_price
+    else:
+        final_leg_pnl = (setup.entry_price - exit_price) / setup.entry_price
+
+    if setup.partial_closed and setup.partial_pnl_pct is not None:
+        # 85% locked at partial_pnl + 15% at final_leg_pnl
+        setup.pnl_pct = 0.85 * setup.partial_pnl_pct + 0.15 * final_leg_pnl
+    else:
+        # Full position exited at this point
+        setup.pnl_pct = final_leg_pnl
 
 
 # ============================================================================

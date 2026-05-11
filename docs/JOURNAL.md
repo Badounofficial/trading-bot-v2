@@ -138,7 +138,68 @@ Pour chaque structure de break (NEW_HIGH/NEW_LOW/HH/LL) :
 Fichiers : `strategies/icc_orderblocks.py` (370 l.), `tests/test_icc_orderblocks.py` (23 tests), `scripts/validate_obs_on_real_data.py`
 
 Détails complets : `docs/RECAPS/SESSION_3_RECAP.md` + `docs/RECAPS/AUDIT_SESSION_3.md`
+### Session 4 — 11 Mai 2026 — ICC Cycle Complet (TU#4)
 
+**Durée** : ~6h | **Statut** : ✅ Complète, 18/18 tests, 63/63 ICC total
+
+#### Approche : machine à états multi-TF + money management complet
+
+1. **Multi-TF cascade** : Daily → H4 → H1, alignement strict
+2. **Machine à états** : SCANNING → INDICATION → CORRECTION → READY → IN_TRADE → COOLDOWN
+3. **Correction Path A/B** : deep (touche OB H4) ou shallow (Fibo 50%)
+4. **Money management** : SL avant-dernier HL/LH, TP=OB opposé RR≥2.5 OU measured RR 3.0, trailing structurel, partial 85%
+5. **TRAILING_HIT vs SL_HIT** : exit reason discriminé (sémantique propre)
+
+#### Validation sur vraies données (CONFIG A, 2 ans)
+
+| Actif | Trades | Win rate | PnL total | Avg win | Avg loss |
+|---|---|---|---|---|---|
+| BTC | 34 | 52.9% | +25.69% | +2.24% | -0.92% |
+| ETH | 39 | **82.1%** | **+89.11%** | +2.65% | -0.45% |
+| SOL | 43 | 53.5% | +72.46% | +2.95% | -0.75% |
+| **Moy** | **39** | **62.8%** | **+62.42%** | +2.61% | -0.71% |
+
+**+62% moyen sur 2 ans avec 39 trades/an. Ratio gain/perte ~3.7x.**
+
+#### Comparaison 3 configs (faite via Cowork)
+
+- **CONFIG A** (Daily + TP measured 1:2) = baseline → meilleure
+- **CONFIG B** (Daily + TP=OB ou measured 1:3) = identique à A (peu d'OBs utilisables)
+- **CONFIG C** (sans Daily filter) = dégrade fortement (BTC devient négatif)
+
+**Verdict** : le filtre Daily est crucial. Garder CONFIG A.
+
+#### Décisions importantes
+
+- Path A vs Path B exclusifs dans la condition de re-entry
+- TP=OB filtre RR ≥ 2.5, sinon fallback measured move
+- Partial 85% au TP, 15% trailing
+- Pas de break-even (règle TradesSAI)
+- TRAILING_HIT séparé de SL_HIT (sémantique propre)
+
+#### Problèmes rencontrés
+
+1. **`icc_cycle_v2.py` mal nommé** (en réalité version pré-refactor) → archivé proprement.
+2. **Test Path A pur initial mal construit** (OB déclenchait Path B automatiquement) → corrigé en plaçant OB au-dessus du fibo_50.
+3. **`pytest` manquant dans venv** → installé.
+
+#### Réserves documentées (à raffiner Session 5)
+
+- Invalidation H4 NEW_HIGH/LOW opposé : couvert indirectement via Daily flip
+- Invalidation OB cassé directement : couvert partiellement par CORRECTION_TOO_DEEP
+- Partial 85% pas encore validé empiriquement en backtest
+
+Fichiers :
+- `strategies/icc_cycle.py` (887 l.)
+- `tests/test_icc_cycle.py` (530 l., 18 tests)
+- `scripts/compare_icc_configs.py` (~250 l.)
+- `scripts/validate_icc_cycle_on_real_data.py` (~150 l.)
+- `scripts/verify_session_4.sh` (validation 1 commande)
+- `archive/session_4_experiments/` (anciens fichiers archivés)
+
+Détails complets : `docs/RECAPS/SESSION_4_RECAP.md` + `docs/RECAPS/AUDIT_SESSION_4.md`
+
+---
 ---
 
 ## Règles d'or du projet (non-négociables)
@@ -169,13 +230,11 @@ Détails complets : `docs/RECAPS/SESSION_3_RECAP.md` + `docs/RECAPS/AUDIT_SESSIO
 
 ## Statut global du projet (au 11 Mai 2026)
 
-```
 ✅ Phase 1 — Données            (24 fichiers parquet, 12 ans crypto)
 ✅ Session 2 — Structure ICC    (22/22 tests, validé sur 4 actifs)
 ✅ Session 3 — Order Blocks     (23/23 tests, validé sur 3 actifs)
-🔨 Session 4 — Cycle ICC complet (TU#4 - à venir)
-🔨 Session 5 — Walk-forward     (à venir)
-```
+✅ Session 4 — Cycle ICC complet (18/18 tests, +62% moyen 2 ans BTC/ETH/SOL)
+🔨 Session 5 — Walk-forward     (à venir — 8 cryptos × 12 ans)
 
 **Tests totaux ICC** : 45/45 passent (22 structure + 23 OBs)
 **Couverture spec ICC** : TU#1 + TU#2 + TU#3 ✅ (60% des TUs)
