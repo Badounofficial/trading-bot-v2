@@ -198,6 +198,105 @@ Fichiers :
 - `archive/session_4_experiments/` (anciens fichiers archivés)
 
 Détails complets : `docs/RECAPS/SESSION_4_RECAP.md` + `docs/RECAPS/AUDIT_SESSION_4.md`
+### Session 5 — 11 Mai 2026 (soir) — Walk-Forward + Verdict Final
+
+**Durée** : ~3h30 | **Statut** : ✅ Complète — VERDICT DÉFINITIF
+
+#### Objectif
+
+Répondre à la question critique : *"ICC est-il statistiquement viable pour passer en paper trading ?"*
+
+#### Méthodologie (décidée AVANT les runs — anti-overfitting)
+
+- **Schéma** : Walk-forward glissant — train 12mo / test 6mo / step 3mo
+- **Actifs** : 8 cryptos Kraken (BTC, ETH, SOL, ADA, LINK, DOT, AVAX, LTC)
+- **Données** : Daily natif + H4 resamplé depuis H1 (étend 2 ans → 4-12 ans selon actif)
+- **Verdict Hard/Soft** : 3/3 hard + 3/4 soft = VIABLE
+
+#### Critères verrouillés à l'avance
+
+**HARD (3/3 mandatory)** :
+- Profit Factor ≥ 1.5
+- Max Drawdown ≤ 35%
+- ≥ 5/8 actifs profitables
+
+**SOFT (3/4 needed)** :
+- Win Rate ≥ 50%
+- Sharpe annualisé ≥ 1.0
+- Trades/an ≥ 5
+- ≥ 60% fenêtres profitables
+
+#### Résultats — Full run (step 3mo, 159s)
+
+| Actif | Fenêtres | Trades | WR % | PF | PnL cumulé | Max DD |
+|---|---|---|---|---|---|---|
+| LTC | 43 | 333 | 55.2% | 3.65 | **+608%** | 8.6% |
+| ETH | 36 | 345 | 63.7% | 4.25 | **+561%** | 17.4% |
+| LINK | 20 | 234 | 61.4% | 3.45 | +389% | 9.6% |
+| ADA | 24 | 261 | 53.1% | 2.75 | +361% | 14.5% |
+| AVAX | 11 | 137 | 67.7% | 6.29 | +278% | 7.6% |
+| SOL | 13 | 145 | 54.8% | 4.12 | +276% | 7.2% |
+| DOT | 16 | 147 | 58.1% | 2.84 | +191% | 10.3% |
+| BTC | 43 | 366 | 48.0% | 1.65 | +171% | 28.5% |
+
+**Total : 226 fenêtres, 1,968 trades sur 12 ans.**
+
+#### VERDICT FINAL ✅ VIABLE
+
+```
+HARD : 3/3 ✓✓✓
+  ✓ PF agrégé             : 3.22
+  ✓ Max DD worst          : 28.5%
+  ✓ Actifs profitables    : 8/8
+
+SOFT : 4/4 ✓✓✓✓
+  ✓ Win Rate moyen        : 57.7%
+  ✓ Sharpe annualisé      : 1.86
+  ✓ Trades/an             : 20.3
+  ✓ Fenêtres profitables  : 86.0%
+```
+
+#### Cohérence Quick vs Full
+
+| Métrique | Quick (step 6mo) | Full (step 3mo) |
+|---|---|---|
+| PF agrégé | 3.21 | 3.22 |
+| Verdict | ✅ VIABLE | ✅ VIABLE |
+
+**Robustesse statistique confirmée.**
+
+#### Décisions et leçons
+
+- **Règle Hard/Soft > 7/7 strict** : préserve la rigueur sur les vrais killers tout en acceptant qu'un soft trébuche
+- **Resampling H1→H4** : indispensable pour stat power (BTC : 3 fenêtres natif → 43 fenêtres resamplé)
+- **ICC est cross-asset robuste** : 8/8 profitables, PF 1.65-6.29
+- **BTC = plancher** : marché efficient, moins d'edge, mais reste rentable
+- **Bear markets** : ICC souffre (BTC 2015) — à monitorer en live
+
+#### Limites assumées (documentées dans RECAP)
+
+- PnL = somme returns (pas composé)
+- Frais & slippage non inclus → estimation -10-15% net
+- H4 resamplé (cohérent par construction, ≠ H4 natif Kraken)
+- SOL/AVAX = stat plus étroite (11-13 fenêtres)
+- 2 réserves Session 4 toujours actives (invalidations partielles)
+
+Fichiers :
+- `data/resample_h1_to_h4.py` (200 l.)
+- `strategies/walkforward_icc.py` (400 l.)
+- `scripts/run_session_5_verdict.py` (280 l.)
+
+Détails complets : `docs/RECAPS/SESSION_5_RESULTS.md`, `SESSION_5_RECAP.md`, `AUDIT_SESSION_5.md`
+
+#### Prochaine étape
+
+**Session 6 — Paper trading Kraken**
+- Sandbox / paper trading 1-2 mois minimum avant capital réel
+- Ingestion data live + order routing SL/TP
+- Monitoring + alerting
+- Plan d'exit si performance live < 50% du backtest cumulé sur 3 mois
+
+---
 
 ---
 ---
