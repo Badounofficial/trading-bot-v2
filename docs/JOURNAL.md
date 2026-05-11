@@ -15,30 +15,6 @@
 **Durée** : Xh
 **Objectif** : ...
 **Statut final** : ✅ Complète | ⚠ Partielle | ❌ Bloquée
-
-### Ce qu'on a fait
-- ...
-
-### Fichiers modifiés / créés
-- ...
-
-### Tests
-- ...
-
-### Problèmes rencontrés
-- ...
-
-### Solutions appliquées
-- ...
-
-### Décisions importantes
-- ...
-
-### À faire ensuite
-- ...
-
-### Bilan honnête
-- ...
 ```
 
 ---
@@ -47,158 +23,49 @@
 
 ### Session 0 — 10 Mai 2026 — Initialisation et 4 stratégies testées (toutes négatives)
 
-**Durée** : ~12h
-**Objectif initial** : Construire un bot trading crypto rentable
-**Statut final** : ❌ 4 stratégies invalidées par walk-forward rigoureux
+**Durée** : ~12h | **Statut** : ❌ 4 stratégies invalidées par walk-forward
 
-#### Ce qu'on a fait
-
-1. **Framework de backtest production-grade** construit de zéro :
-   - `backtest/engine.py` (funding capture vectorisé)
-   - `backtest/directional_engine.py` (long/short)
-   - Calibration friction empirique : 0.87 bps slippage médian, 4.5 bps taker fee Hyperliquid
-
-2. **4 stratégies testées avec walk-forward** :
-   - ❌ Funding Capture Hyperliquid : marchait 2024 (+22.81% CAGR), morte 2026 (-0.41%)
-   - ❌ Trend Following Donchian + MA147 : train +3.35%, test -25.90% (overfit)
-   - ❌ Mean Reversion (BB+RSI) : train +15.19%, test -3.82%, MaxDD -118% (explosif)
-   - ❌ Cross-Sectional Momentum : train -5.05%, test -22.85% (correlation crypto)
-
-3. **Données collectées** :
-   - Funding Hyperliquid : 28 mois BTC/ETH/SOL
-   - Prices Hyperliquid : 7 mois hourly BTC/ETH/SOL
-   - Daily Kraken via API : 9 cryptos × 2 ans
-
-4. **Tests unitaires** : 31 tests passent (9 engine + 13 trend + 9 mr_xsec)
-
-#### Décisions importantes
-
-- Walk-forward systématique sur toute stratégie (non-négociable)
-- Méthodologie : forensic + walk-forward + sanity check
-- Stratégies retail crypto "classiques" → marché crypto 2024-2026 trop efficient
-
-#### Bilan honnête
-
-- **0 stratégie viable** trouvée parmi les 4 testées
-- **Mais** : framework de validation détecté l'overfitting, économisant ~$19,500 de pertes potentielles
-- Décision : pivoter vers ICC (méthodologie price action de TradesSAI)
+- Framework de backtest production-grade (engine + directional_engine)
+- 4 stratégies testées : Funding Capture, Trend Following, Mean Reversion, Cross-Sec Momentum
+- **0 stratégie viable** mais framework de validation a évité ~$19,500 de pertes potentielles
+- Décision : pivoter vers ICC (méthodologie TradesSAI)
+- 31 tests unitaires passent
 
 ---
 
 ### Session 1 — 10 Mai 2026 (suite) — ICC v1 simplifiée (rejetée)
 
-**Durée** : ~2h
-**Objectif** : Tester ICC sur Gold/NASDAQ et crypto
-**Statut final** : ⚠ Première implémentation rejetée (trop simplifiée)
+**Durée** : ~2h | **Statut** : ⚠ Rejetée car pas fidèle à la spec
 
-#### Ce qu'on a fait
-
-- Code initial `strategies/icc.py` (250 lignes) avec logique state machine basique
-- 9 tests unitaires
-- Walk-forward rolling 5 fenêtres
-- Test sur Gold/NASDAQ (5 ans yfinance) : 3/5 fenêtres profitables, CAGR moyen -0.10%
-- Verdict : MARGINAL (pas un edge robuste)
-
-#### Problème détecté
-
-L'implémentation v1 ne reflétait **pas réellement ICC** :
-- Pas de structure HH/HL/LH/LL séquence-aware
-- Pas d'Order Blocks
-- Pas de multi-timeframe Daily/H4/H1
-- Détection de "correction" arbitraire (% Fib)
-
-#### Solution
-
-Badoun a fourni **5 Tests Unitaires PDFs + 1 doc DOCX complet** (Strategie_ICC_Complete.docx). Spec extrêmement précise.
-Décision : **Reprendre proprement** avec sessions structurées.
+- `strategies/icc.py` v1 (250 lignes, state machine basique)
+- Gold/NASDAQ : 3/5 fenêtres profitables, CAGR moyen -0.10% → MARGINAL
+- Problème : pas séquence-aware, pas d'OB, pas multi-TF
+- Solution : Badoun fournit 5 TUs PDFs + DOCX complet → reprendre proprement
 
 ---
 
-### Session "Phase 1" — 10 Mai 2026 (soir) — Data pipeline multi-TF Kraken
+### Phase 1 — 10 Mai 2026 (soir) — Data pipeline multi-TF Kraken
 
-**Durée** : ~2h
-**Objectif** : Télécharger Daily + H4 + H1 pour 8-9 cryptos sur 5+ années
-**Statut final** : ✅ Complète
+**Durée** : ~2h | **Statut** : ✅ Complète
 
-#### Problème majeur découvert
+- **Problème** : Kraken API limitée à 720 bars rolling (insuffisant)
+- **Solution** : Kraken historical dump 7.3 GB via Google Drive
+- 24 fichiers parquet : 8 cryptos × (1d, 4h, 1h)
+- BTC daily : 12 ans, BTC H1 : 12 ans, H4 : 2 ans (limitation Kraken)
+- DOGE retiré (DOGE/USD n'existe pas sur Kraken)
 
-**Kraken API publique limitée à 720 bars max par TF** (rolling, non-paginable). Donc :
-- API : 30 jours de H1 max, 120 jours de H4 max → insuffisant pour ICC
-
-#### Solution trouvée
-
-**Kraken historical data dump** (gratuit, complet) :
-- Page officielle : https://support.kraken.com/articles/360047124832
-- ZIP "Complete Data" via Google Drive (7.3 GB)
-- Contient toutes les paires × TF de 1m à 1440 (daily) depuis le début de chaque marché
-
-#### Fichiers créés
-
-- `data/fetch_multi_tf.py` — wrapper API Kraken (utile pour updates incrémentaux futurs)
-- `data/parse_kraken_zip.py` — parser du dump historique (BTC, ETH, SOL, ADA, LINK, DOT, AVAX, LTC × 1d/4h/1h)
-- `data/validate_data.py` — validateur de qualité des données
-- `data/cache_cleanup.py` — nettoyage cache redondant
-
-#### Données finales en cache
-
-```
-Kraken 1d  : 8 cryptos, jusqu'à 12 ans d'historique (BTC depuis 2013)
-Kraken 4h  : 8 cryptos, 2 ans (limitation: archive Kraken H4 commence 2024-01)
-Kraken 1h  : 8 cryptos, jusqu'à 12 ans (BTC : 96,381 bars)
-```
-
-#### Note importante sur DOGE
-
-DOGE/USD n'existe pas sur Kraken (régulation US). Disponible uniquement en DOGEUR. → Décision : retirer DOGE du universe, garder 8 cryptos.
-
-#### Bilan
-
-- Passé de **209 jours Hyperliquid → 12 ans Kraken multi-TF**
-- 27 fichiers parquet propres dans cache/
-- Tous sanity checks validés
+Fichiers : `data/parse_kraken_zip.py`, `data/fetch_multi_tf.py`, `data/validate_data.py`, `data/cache_cleanup.py`
 
 ---
 
-### Session 2 — 10 Mai 2026 (soir, suite) — ICC Structure Detection (TU#1 + TU#2)
+### Session 2 — 10 Mai 2026 (soir) — ICC Structure Detection (TU#1 + TU#2)
 
-**Durée** : ~3h
-**Objectif** : Détection rigoureuse des structures de marché ICC (HH/HL/LH/LL/New H/L)
-**Statut final** : ✅ Complète, 22/22 tests passent, validé sur 4 actifs réels
+**Durée** : ~3h | **Statut** : ✅ Complète, 22/22 tests
 
-#### Approche utilisée
+#### Approche : architecture 2-step
 
-**Architecture 2-step propre** (après échec d'une v1 incrémentale) :
-1. **Confirmation de swing avec lag W** : un swing à la bar i est confirmé à i+W (pas de lookahead)
-2. **Classification ICC** : selon contexte (active high/low + trend state)
-
-#### Règles ICC implémentées (fidèles aux TU)
-
-- ✅ Body close only (TU#1) — wicks = liquidité, jamais structure
-- ✅ Pivot = "origine d'impulse" (TU#2) — pas un pivot mathématique
-- ✅ Sequence-aware : HH après HH dans bull trend, LH après LH dans bear trend
-- ✅ New High / New Low = CHoCH (1er break direction opposée)
-- ✅ HH/LL = reproduction dans même direction
-- ✅ Active vs broken state tracking
-- ✅ Confirmation lag = W bars (aucun lookahead)
-
-#### Fichiers créés
-
-- `strategies/icc_structure.py` (320 lignes, code propre)
-- `tests/test_icc_structure.py` (22 tests, tous passent)
-- `scripts/validate_icc_on_real_data.py` (script de validation visuelle)
-
-#### Tests passés : 22/22
-
-1-3. Primitives swing (peak, trough, edges)
-4-5. Body close rule (wicks ignorés)
-6-7. Initial structures (INITIAL_HIGH, INITIAL_LOW)
-8-9. CHoCH (NEW_HIGH après bear, NEW_LOW après bull)
-10-11. Reproduction (HH après NEW_HIGH, LL après NEW_LOW)
-12. Pullback structures (HL)
-13-14. Origin assignment
-15-16. Active/broken tracking
-17. Confirmation lag (no lookahead)
-18-22. Stress / sanity (no crash, ordering, no duplicates, balance)
+1. **Confirmation swing avec lag W** : pas de lookahead
+2. **Classification ICC** : selon contexte (active high/low + trend)
 
 #### Validation sur vraies données
 
@@ -209,45 +76,68 @@ DOGE/USD n'existe pas sur Kraken (régulation US). Disponible uniquement en DOGE
 | BTC h4 | 2.0 ans | 4383 | 902 | 1.05 | ✓ |
 | SOL daily | 4.5 ans | 1659 | 193 | 1.03 | ✓ |
 
-#### Problèmes rencontrés
-
-1. **v1 buggée** (approche en 1 passe) :
-   - INITIAL_HIGH non marqué cassé après NEW_HIGH
-   - Génération de HH/HL à chaque bougie qui monte (sans pullback)
-   - **Solution** : recommencer en 2-step
-
-2. **Tests avec numpy bool** :
-   - `is True` retournait False car numpy bool ≠ Python bool
-   - **Solution** : utiliser `assert result` au lieu de `assert result is True`
-
-3. **Tests synthétiques trop courts** :
-   - `is_swing` requiert `i + W < len(data)` → tests de 9 bars trop courts
-   - **Solution** : allonger séquences à 25+ bars
-
 #### Décisions importantes
 
-- **swing_lookback=5 pour daily, 3 pour intraday** (compromis sensibilité/bruit)
-- **Pas de paramètre arbitraire** : pas de min_correction_pct, max_correction_pct (overfitting risk)
-- **Lookback contextuel** : origin = swing low juste avant le swing high (pas une fenêtre fixe)
+- swing_lookback=5 daily, 3 intraday
+- Pas de paramètre arbitraire (anti-overfitting)
+- Origin = swing low juste avant le swing high (contextuel)
 
-#### À faire ensuite
+Fichiers : `strategies/icc_structure.py` (320 l.), `tests/test_icc_structure.py` (22 tests), `scripts/validate_icc_on_real_data.py`
 
-**Session 3 — Order Blocks (TU#3)** :
-- Détection OB- (dernière bougie haussière avant grand mouvement baissier)
-- Détection OB+ (dernière bougie baissière avant grand mouvement haussier)
-- Scoring force : VERY_STRONG / STRONG / MODERATE / WEAK
-- Cassure structure obligatoire pour validation
-- Discount/Premium (50% du range)
-- Usage unique (consommation)
+Détails complets : `docs/RECAPS/SESSION_2_RECAP.md`
 
-**Estimation** : 3-4h, 6-8 tests unitaires
+---
 
-#### Bilan honnête
+### Session 3 — 11 Mai 2026 (matin) — ICC Order Blocks Detection (TU#3)
 
-- ✅ Fondation solide pour tout le reste du bot
-- ✅ Code maintenable, testé, documenté
-- ✅ Performance acceptable (3000 bars en 0.04s)
-- ⚠ Pas encore connecté à logique de trading (Session 4)
+**Durée** : ~2h | **Statut** : ✅ Complète, 23/23 tests
+
+#### Approche : pipeline rétrospectif
+
+Pour chaque structure de break (NEW_HIGH/NEW_LOW/HH/LL) :
+1. Cherche rétrospectivement la dernière bougie opposée = OB candle
+2. Compte les bougies same-direction dans le mouvement
+3. Détecte FVG (Fair Value Gap)
+4. Score force : VERY_STRONG / STRONG / MODERATE / rejected
+5. Marque consommation quand prix retouche zone
+
+#### Règles TU#3 implémentées (toutes)
+
+- ✅ OB- = dernière bougie haussière avant grand mouvement baissier
+- ✅ OB+ = dernière bougie baissière avant grand mouvement haussier
+- ✅ Zone OB = [open, close] (body only, pas wicks)
+- ✅ Cassure structure obligatoire
+- ✅ Min 3 bougies + FVG OU 5+ bougies sans FVG
+- ✅ FVG bullish/bearish détectés
+- ✅ Usage unique (consommation tracked)
+- ✅ Discount/Premium classification
+
+#### Validation sur vraies données
+
+| Actif | Bars | OBs | VERY_STRONG | Consumed | Favorable | Sanity |
+|---|---|---|---|---|---|---|
+| BTC daily | 4457 | 100 | 97% | 92% | 72% | 5/5 ✓ |
+| ETH daily | 3794 | 88 | 100% | 86% | 76% | 5/5 ✓ |
+| BTC H4 | 4383 | 153 | 98% | 95% | 93% | 5/5 ✓ |
+
+**Quantité** : ~10 OBs/an = sélectivité élevée pour swing trading.
+**Qualité** : 97-100% des OBs sont VERY_STRONG = élite uniquement.
+
+#### Décisions importantes (validées avant codage)
+
+- Q1 : "Grand mouvement" = mouvement qui casse une structure (output Session 2)
+- Q2 : Détection rétrospective au lag W (pas de lookahead)
+- Q3 : Cassure structure du sens opposé (OB+ casse LH/LL)
+- Q4 : Scoring strict spec, pas de paramètre arbitraire
+
+#### Problèmes rencontrés
+
+1. Random walk → 84% rejet (inquiétant). Validé sur crypto-like (50%) puis BTC (61%) → sain.
+2. 2 tests synthétiques mal construits → corrigés.
+
+Fichiers : `strategies/icc_orderblocks.py` (370 l.), `tests/test_icc_orderblocks.py` (23 tests), `scripts/validate_obs_on_real_data.py`
+
+Détails complets : `docs/RECAPS/SESSION_3_RECAP.md` + `docs/RECAPS/AUDIT_SESSION_3.md`
 
 ---
 
@@ -269,11 +159,27 @@ DOGE/USD n'existe pas sur Kraken (régulation US). Disponible uniquement en DOGE
 - `README.md` — Point d'entrée du projet (lis ça en premier)
 - `docs/JOURNAL.md` — Ce fichier (chronologie complète)
 - `docs/ARCHITECTURE.md` — Carte du projet (fichiers, dépendances)
-- `docs/ICC_SPEC.md` — Résumé de la spec ICC (depuis Strategie_ICC_Complete.docx)
+- `docs/ICC_SPEC.md` — Résumé de la spec ICC
 - `docs/AUDIT_TEMPLATE.md` — Checklist à faire à chaque fin de chapitre
 - `docs/RECAPS/SESSION_N_RECAP.md` — Recap détaillé de chaque session
+- `docs/RECAPS/AUDIT_SESSION_N.md` — Audit fin de chapitre
 - `scripts/backup.sh` — Script de sauvegarde automatique
 
 ---
 
-*Dernière mise à jour : 10 Mai 2026 — Fin Session 2*
+## Statut global du projet (au 11 Mai 2026)
+
+```
+✅ Phase 1 — Données            (24 fichiers parquet, 12 ans crypto)
+✅ Session 2 — Structure ICC    (22/22 tests, validé sur 4 actifs)
+✅ Session 3 — Order Blocks     (23/23 tests, validé sur 3 actifs)
+🔨 Session 4 — Cycle ICC complet (TU#4 - à venir)
+🔨 Session 5 — Walk-forward     (à venir)
+```
+
+**Tests totaux ICC** : 45/45 passent (22 structure + 23 OBs)
+**Couverture spec ICC** : TU#1 + TU#2 + TU#3 ✅ (60% des TUs)
+
+---
+
+*Dernière mise à jour : 11 Mai 2026 — Fin Session 3*
