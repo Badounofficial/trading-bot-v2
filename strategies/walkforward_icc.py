@@ -234,6 +234,7 @@ def run_walkforward_asset(
     test_months: int = 6,
     step_months: int = 3,
     verbose: bool = False,
+    sl_mode: str = 'v1_h1_close',
 ) -> AssetResult:
     """
     Run walk-forward backtest for one asset.
@@ -273,6 +274,7 @@ def run_walkforward_asset(
                 h1_prices=h1_slice,
                 mode=TradeMode.SWING,
                 verbose=False,
+                sl_mode=sl_mode,
             )
         except Exception as e:
             if verbose:

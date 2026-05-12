@@ -146,6 +146,7 @@ class TradeSetup:
     sl_initial: Optional[float] = None
     sl_current: Optional[float] = None
     sl_history: list[tuple[int, float]] = field(default_factory=list)  # (bar_index, sl_price)
+    sl_source: Optional[str] = None  # "H1_close_prev_HL" (V1) | "H4_wick_active_HL" (V2) | ...
     tp_target: Optional[float] = None
     tp_source: Optional[str] = None  # "OB_H4" | "OB_DAILY" | "MEASURED_MOVE"
     
@@ -310,6 +311,9 @@ def update_setup_state(
     daily_bias_now: BiasState,
     h4_obs: Optional[list[OrderBlock]] = None,
     daily_obs: Optional[list[OrderBlock]] = None,
+    h4_prices: Optional[pd.DataFrame] = None,
+    h4_structs: Optional[list[StructurePoint]] = None,
+    sl_mode: str = 'v1_h1_close',
 ) -> None:
     """
     Advance the setup's state machine by one H1 bar.
@@ -430,13 +434,15 @@ def update_setup_state(
         if is_break:
             # TRIGGER ENTRY
             _trigger_entry(setup, h1_bar, current_close, timestamps[h1_bar],
-                           h1_prices, h1_structs, h4_obs=h4_obs, daily_obs=daily_obs)
+                           h1_prices, h1_structs, h4_obs=h4_obs, daily_obs=daily_obs,
+                           h4_prices=h4_prices, h4_structs=h4_structs, sl_mode=sl_mode)
         return
-    
+
     # ── IN_TRADE: monitor SL / TP / trailing ──
     if setup.state == TradeState.IN_TRADE:
         _monitor_in_trade(setup, h1_bar, h1_prices, h1_structs, current_close,
-                           current_high, current_low, timestamps[h1_bar])
+                           current_high, current_low, timestamps[h1_bar],
+                           h4_prices=h4_prices, h4_structs=h4_structs, sl_mode=sl_mode)
         return
 
 
@@ -470,17 +476,33 @@ def _trigger_entry(
     h1_structs: list[StructurePoint],
     h4_obs: Optional[list[OrderBlock]] = None,
     daily_obs: Optional[list[OrderBlock]] = None,
+    h4_prices: Optional[pd.DataFrame] = None,
+    h4_structs: Optional[list[StructurePoint]] = None,
+    sl_mode: str = 'v1_h1_close',
 ):
     """Move setup to IN_TRADE, compute SL and TP."""
     setup.state = TradeState.IN_TRADE
     setup.entry_bar = h1_bar
     setup.entry_price = entry_price
     setup.entry_timestamp = entry_ts
-    
-    # SL = previous (avant-dernier) HL for BUY / LH for SELL on H1
-    sl = _compute_initial_sl(setup, h1_bar, h1_structs)
+
+    # SL anchor — depends on sl_mode:
+    #   V1 (default): previous HL on H1, on the close (legacy behaviour).
+    #   V2: last unbroken HL on H4 (reference TF), on the wick (low/high of H4 bar).
+    if sl_mode in ('v2_h4_wick', 'v2b_h4_close') and h4_prices is not None and h4_structs is not None:
+        anchor = 'wick' if sl_mode == 'v2_h4_wick' else 'close'
+        sl, sl_src = _compute_initial_sl_h4(setup, h1_bar, h1_prices, h4_prices, h4_structs, anchor=anchor)
+        if sl is None:
+            # Fallback to V1 if H4 data is insufficient (early in slice)
+            sl = _compute_initial_sl(setup, h1_bar, h1_structs)
+            sl_src = f'{sl_mode}→V1_FALLBACK_H1_close'
+    else:
+        sl = _compute_initial_sl(setup, h1_bar, h1_structs)
+        sl_src = 'V1_H1_close_prev_HL'
+
     setup.sl_initial = sl
     setup.sl_current = sl
+    setup.sl_source = sl_src
     setup.sl_history.append((h1_bar, sl))
     
     # TP = opposite OB on Daily/H4 (per spec) or fallback measured move 1:3
@@ -530,6 +552,95 @@ def _compute_initial_sl(
             return setup.h4_ob.zone_low * 0.999
         else:
             return setup.h4_ob.zone_high * 1.001
+
+
+# ----------------------------------------------------------------------------
+# V2 SL — anchored on the H4 structural swing low/high (wick + buffer)
+# ----------------------------------------------------------------------------
+#
+# Rationale (validated on the ICC Trading Bot project, 5.3y of data):
+#   In SWING mode the H4 is the REFERENCE timeframe and H1 is only the
+#   CONFIRMATION timeframe. Placing the SL on H1's last HL/LH is too tight —
+#   on volatile assets (BTC, Gold...) normal H1 noise reaches the H1 swing
+#   and stops out trades that were structurally still valid.
+#
+#   The "true" level that invalidates a swing-BUY is the H4 swing-low that
+#   marked the structural pivot (the previous unbroken HL on H4, or the
+#   impulse_low). We anchor the SL on the WICK of that H4 bar (its `low`
+#   for BUY, its `high` for SELL), plus a 0.1% buffer just past it.
+#
+#   This gives the trade more room to breathe inside the H4 structure while
+#   still being structurally invalidated if price body-closes through the
+#   reference level.
+
+def _compute_initial_sl_h4(
+    setup: 'TradeSetup',
+    h1_bar: int,
+    h1_prices: pd.DataFrame,
+    h4_prices: pd.DataFrame,
+    h4_structs: list[StructurePoint],
+    anchor: str = 'wick',
+) -> tuple[Optional[float], str]:
+    """V2 family: SL anchored on the last unbroken H4 HL (BUY) / LH (SELL).
+
+    anchor='wick'  → low/high of H4 swing bar + 0.1% buffer (V2, widest, original spec)
+    anchor='close' → close of H4 swing bar  + 0.1% buffer (V2b, intermediate)
+
+    Returns (sl_price, source_tag). If H4 data is insufficient at this point
+    in time, returns (None, ...) so the caller can fall back to V1.
+    """
+    # Find the H4 bar that contains the H1 timestamp
+    h1_ts = h1_prices.index[h1_bar]
+    h4_pos = h4_prices.index.searchsorted(h1_ts, side='right') - 1
+    if h4_pos < 0:
+        return None, 'V2_NO_H4_BAR_YET'
+
+    # Target swing type
+    target_type = 'HL' if setup.direction == Direction.BUY else 'LH'
+
+    # 1st choice: last UNBROKEN target_type swing confirmed before h4_pos
+    candidate = None
+    for s in reversed(h4_structs):
+        if s.confirmed_at_bar > h4_pos:
+            continue
+        if s.type != target_type:
+            continue
+        # Was it still unbroken at the time of entry?
+        if s.broken and s.broken_at_bar is not None and s.broken_at_bar <= h4_pos:
+            continue
+        candidate = s
+        break
+
+    # 2nd choice: last NEW_LOW (for BUY) / NEW_HIGH (for SELL) before h4_pos
+    if candidate is None:
+        fallback_type = 'NEW_LOW' if setup.direction == Direction.BUY else 'NEW_HIGH'
+        for s in reversed(h4_structs):
+            if s.confirmed_at_bar > h4_pos:
+                continue
+            if s.type == fallback_type:
+                candidate = s
+                break
+
+    if candidate is None:
+        return None, 'V2_NO_H4_SWING_FOUND'
+
+    # Anchor on the wick of that H4 bar
+    if candidate.bar_index >= len(h4_prices):
+        return None, 'V2_BAR_INDEX_OOB'
+
+    bar = h4_prices.iloc[candidate.bar_index]
+    if setup.direction == Direction.BUY:
+        base = float(bar['low']) if anchor == 'wick' else float(bar['close'])
+        sl = base * 0.999
+        if sl >= setup.entry_price:
+            return None, f'V2_{anchor}_SL_ABOVE_ENTRY'
+    else:
+        base = float(bar['high']) if anchor == 'wick' else float(bar['close'])
+        sl = base * 1.001
+        if sl <= setup.entry_price:
+            return None, f'V2_{anchor}_SL_BELOW_ENTRY'
+
+    return sl, f'V2_H4_{anchor}_{candidate.type}'
 
 
 def _compute_initial_tp(
@@ -598,6 +709,9 @@ def _monitor_in_trade(
     current_high: float,
     current_low: float,
     current_ts: pd.Timestamp,
+    h4_prices: Optional[pd.DataFrame] = None,
+    h4_structs: Optional[list[StructurePoint]] = None,
+    sl_mode: str = 'v1_h1_close',
 ):
     """
     Monitor an open trade: check SL hit, TP hit, update trailing SL.
@@ -662,21 +776,53 @@ def _monitor_in_trade(
         # We just track the partial event.
 
     # ── Trailing SL: structural — follow new HL (BUY) / LH (SELL) ──
-    target_type = 'HL' if setup.direction == Direction.BUY else 'LH'
-    for s in reversed(h1_structs):
-        if s.confirmed_at_bar > h1_bar:
-            continue
-        if s.confirmed_at_bar <= setup.entry_bar:
+    # In V2 mode we trail on the H4 swing (wick), to stay consistent with
+    # the initial SL anchor. In V1 mode we keep the legacy H1-close logic.
+    if sl_mode in ('v2_h4_wick', 'v2b_h4_close') and h4_prices is not None and h4_structs is not None:
+        anchor = 'wick' if sl_mode == 'v2_h4_wick' else 'close'
+        h1_ts_now = h1_prices.index[h1_bar]
+        h4_pos = h4_prices.index.searchsorted(h1_ts_now, side='right') - 1
+        entry_h4_pos = h4_prices.index.searchsorted(setup.entry_timestamp, side='right') - 1
+        target_type = 'HL' if setup.direction == Direction.BUY else 'LH'
+        for s in reversed(h4_structs):
+            if s.confirmed_at_bar > h4_pos:
+                continue
+            if s.confirmed_at_bar <= entry_h4_pos:
+                break
+            if s.type != target_type:
+                continue
+            if s.bar_index >= len(h4_prices):
+                continue
+            bar = h4_prices.iloc[s.bar_index]
+            if setup.direction == Direction.BUY:
+                base = float(bar['low']) if anchor == 'wick' else float(bar['close'])
+                new_sl_candidate = base * 0.999
+                if new_sl_candidate > setup.sl_current and new_sl_candidate < current_close:
+                    setup.sl_current = new_sl_candidate
+                    setup.sl_history.append((h1_bar, new_sl_candidate))
+            else:
+                base = float(bar['high']) if anchor == 'wick' else float(bar['close'])
+                new_sl_candidate = base * 1.001
+                if new_sl_candidate < setup.sl_current and new_sl_candidate > current_close:
+                    setup.sl_current = new_sl_candidate
+                    setup.sl_history.append((h1_bar, new_sl_candidate))
             break
-        if s.type == target_type:
-            new_sl_candidate = s.price * (0.999 if setup.direction == Direction.BUY else 1.001)
-            if setup.direction == Direction.BUY and new_sl_candidate > setup.sl_current:
-                setup.sl_current = new_sl_candidate
-                setup.sl_history.append((h1_bar, new_sl_candidate))
-            elif setup.direction == Direction.SELL and new_sl_candidate < setup.sl_current:
-                setup.sl_current = new_sl_candidate
-                setup.sl_history.append((h1_bar, new_sl_candidate))
-            break
+    else:
+        target_type = 'HL' if setup.direction == Direction.BUY else 'LH'
+        for s in reversed(h1_structs):
+            if s.confirmed_at_bar > h1_bar:
+                continue
+            if s.confirmed_at_bar <= setup.entry_bar:
+                break
+            if s.type == target_type:
+                new_sl_candidate = s.price * (0.999 if setup.direction == Direction.BUY else 1.001)
+                if setup.direction == Direction.BUY and new_sl_candidate > setup.sl_current:
+                    setup.sl_current = new_sl_candidate
+                    setup.sl_history.append((h1_bar, new_sl_candidate))
+                elif setup.direction == Direction.SELL and new_sl_candidate < setup.sl_current:
+                    setup.sl_current = new_sl_candidate
+                    setup.sl_history.append((h1_bar, new_sl_candidate))
+                break
 
 
 def _close_setup(
@@ -735,6 +881,7 @@ def run_icc_cycle(
     skip_daily_filter: bool = False,
     min_rr_for_ob_tp: float = 2.5,
     measured_move_rr: float = 3.0,
+    sl_mode: str = 'v1_h1_close',
 ) -> list[TradeSetup]:
     """
     Run the full ICC cycle on synchronized multi-TF data.
@@ -819,7 +966,9 @@ def run_icc_cycle(
             if setup.state == TradeState.COOLDOWN:
                 continue
             update_setup_state(setup, h1_bar, h1_prices, h1_structs, daily_bias,
-                                h4_obs=h4_obs, daily_obs=daily_obs)
+                                h4_obs=h4_obs, daily_obs=daily_obs,
+                                h4_prices=h4_prices, h4_structs=h4_structs,
+                                sl_mode=sl_mode)
         
         # Try to create new setups from H4 indications confirmed at this H1 bar
         if h1_bar in indication_h1_bars:
