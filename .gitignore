@@ -45,3 +45,5 @@ logs/
 paper_trading/state.db
 paper_trading/logs/*.log
 paper_trading/logs/*.json
+!paper_trading/logs/.gitkeep
+!paper_trading/logs/
