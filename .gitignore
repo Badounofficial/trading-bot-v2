@@ -40,3 +40,8 @@ Thumbs.db
 # Logs
 *.log
 logs/
+
+# Paper trading state and logs
+paper_trading/state.db
+paper_trading/logs/*.log
+paper_trading/logs/*.json
