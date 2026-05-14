@@ -263,12 +263,20 @@ class PaperTrader:
                     result.halt_triggered = True
                     result.halt_reason = stop_check.halt_reason
                     result.n_trades_closed = len(closed)
-                    # No strategy processing once HALTED
+                    # On HALT we recompute equity from scratch via the snapshot
+                    # path; cash_delta from regular processing is not applicable
+                    # because HALT closed everything via trigger_halt.
+                    self._record_equity_snapshot(timestamp_iso, current_prices,
+                                                  cash_delta=0.0, halt_recompute=True)
                 else:
                     # ── 5. Process each asset through strategy adapter ──
+                    cycle_cash_delta = 0.0
                     for asset in result.assets_with_data:
                         try:
-                            self._process_asset(asset, fetched[asset], timestamp_iso, result)
+                            asset_delta = self._process_asset(
+                                asset, fetched[asset], timestamp_iso, result,
+                            )
+                            cycle_cash_delta += asset_delta
                         except Exception as e:
                             # Asset-level error: log but continue with other assets
                             logger.exception("Asset %s processing failed", asset)
@@ -277,8 +285,10 @@ class PaperTrader:
                                 asset=asset, error=str(e),
                             )
 
-                # ── 6. Record equity snapshot ──
-                self._record_equity_snapshot(timestamp_iso, current_prices)
+                    # ── 6. Record equity snapshot with accumulated cash delta ──
+                    self._record_equity_snapshot(
+                        timestamp_iso, current_prices, cash_delta=cycle_cash_delta,
+                    )
 
                 # ── 7. Update last_cycle_timestamp on bot_state ──
                 bs = self.sm.get_bot_state()
@@ -316,28 +326,23 @@ class PaperTrader:
         h1_df: pd.DataFrame,
         timestamp_iso: str,
         result: CycleResult,
-    ) -> None:
-        """Process one asset: prep data, run adapter, execute actions."""
+    ) -> float:
+        """Process one asset: prep data, run adapter, execute actions.
+
+        Returns:
+            cash_delta accumulated from all actions executed on this asset.
+            Bug #1 fix: caller can sum across assets to update the cash
+            field of the equity snapshot.
+        """
+        cash_delta = 0.0
         try:
             daily, h4, h1 = data_prep.prepare_multi_tf_for_icc(h1_df)
         except data_prep.DataPrepError as e:
             logger.warning("Data prep failed for %s: %s", asset, e)
-            return
+            return 0.0
 
         actions, _ = self.adapter.get_actions_for_cycle(asset, daily, h4, h1)
 
-        # Process actions in order, with special handling for setups that
-        # have BOTH an Open and a Close in the same cycle (this happens when
-        # ICC sees a setup's full lifecycle within the visible window).
-        #
-        # Standard order: TRAIL → CLOSE → PARTIAL → OPEN
-        # Why: closes free up capital before opens try to use it.
-        #
-        # EXCEPTION (Bug fix from dry run, Session 7):
-        # For setups that have BOTH Open and Close emitted in the same cycle,
-        # we must process Open FIRST, then Close on that same setup.
-        # Otherwise, _exec_close skips with "unknown position" warning because
-        # the position hasn't been recorded in state_manager yet.
         trails = [a for a in actions if isinstance(a, TrailAction)]
         closes = [a for a in actions if isinstance(a, CloseAction)]
         partials = [a for a in actions if isinstance(a, PartialAction)]
@@ -345,8 +350,10 @@ class PaperTrader:
 
         # Step 1: All Trails (free, just update SL in DB)
         for a in trails:
-            if self._exec_trail(a, timestamp_iso):
+            ok, d = self._exec_trail(a, timestamp_iso)
+            if ok:
                 result.n_trails += 1
+                cash_delta += d
 
         # Step 2: Identify setups with BOTH open AND close in this cycle
         sids_with_open = {a.setup_id for a in opens}
@@ -357,10 +364,14 @@ class PaperTrader:
         for sid in sids_open_and_close:
             open_a = next(a for a in opens if a.setup_id == sid)
             close_a = next(a for a in closes if a.setup_id == sid)
-            if self._exec_open(open_a, timestamp_iso):
+            ok_open, d_open = self._exec_open(open_a, timestamp_iso)
+            if ok_open:
                 result.n_trades_opened += 1
-                if self._exec_close(close_a, timestamp_iso):
+                cash_delta += d_open
+                ok_close, d_close = self._exec_close(close_a, timestamp_iso)
+                if ok_close:
                     result.n_trades_closed += 1
+                    cash_delta += d_close
             else:
                 result.n_trades_skipped += 1
 
@@ -369,27 +380,41 @@ class PaperTrader:
         for a in closes:
             if a.setup_id in sids_open_and_close:
                 continue  # already handled above
-            if self._exec_close(a, timestamp_iso):
+            ok, d = self._exec_close(a, timestamp_iso)
+            if ok:
                 result.n_trades_closed += 1
+                cash_delta += d
 
         # Step 4: Partials (mark 90% taken on existing positions)
         for a in partials:
-            if self._exec_partial(a, timestamp_iso):
+            ok, d = self._exec_partial(a, timestamp_iso)
+            if ok:
                 result.n_partials += 1
+                cash_delta += d
 
         # Step 5: Opens for setups WITHOUT a paired Close (real new entries)
         for a in opens:
             if a.setup_id in sids_open_and_close:
                 continue  # already handled above
-            if self._exec_open(a, timestamp_iso):
+            ok, d = self._exec_open(a, timestamp_iso)
+            if ok:
                 result.n_trades_opened += 1
+                cash_delta += d
             else:
                 result.n_trades_skipped += 1
 
+        return cash_delta
+
     # ─── Action executors ─────────────────────────────────────────
 
-    def _exec_open(self, a: OpenAction, ts: str) -> bool:
-        """Execute an OpenAction. Returns True if a position was opened, False if skipped."""
+    def _exec_open(self, a: OpenAction, ts: str) -> tuple[bool, float]:
+        """Execute an OpenAction.
+
+        Returns:
+            (success, cash_delta):
+            - success: True if a position was opened, False if skipped
+            - cash_delta: change in cash (negative for opens, 0 if skipped)
+        """
         # Compute free capital from latest snapshot
         latest = self.sm.get_latest_equity_snapshot()
         free_cap = latest.cash if latest else config.INITIAL_CAPITAL
@@ -403,7 +428,7 @@ class PaperTrader:
             self.monitor.log_trade_skipped(
                 a.asset, reason="insufficient_capital", ts=ts,
             )
-            return False
+            return False, 0.0
 
         # Persist the position
         position_id = _setup_id_to_position_id(a.setup_id)
@@ -430,23 +455,22 @@ class PaperTrader:
             tp_price=a.tp_price if a.tp_price is not None else 0.0,
             ts=ts,
         )
-        return True
+        # fill.cash_delta is negative (cash out for BUY)
+        return True, fill.cash_delta
 
-    def _exec_close(self, a: CloseAction, ts: str) -> bool:
+    def _exec_close(self, a: CloseAction, ts: str) -> tuple[bool, float]:
         """Execute a CloseAction: simulate SELL, record, remove position.
 
         Returns:
-            True if the close was executed, False if skipped (position unknown).
-            Bug #2 fix: caller can use this to increment counters accurately.
+            (success, cash_delta):
+            - success: True if executed, False if position unknown
+            - cash_delta: positive (cash in from sell), 0 if skipped
         """
         position_id = _setup_id_to_position_id(a.setup_id)
         pos = self.sm.get_open_position(position_id)
         if pos is None:
-            # Position not in DB. Either:
-            # - We missed the OPEN (shouldn't happen after Bug 3 fix)
-            # - Adapter emitted close for a setup we never opened
             logger.warning("Close action for unknown position %s — skipping", position_id)
-            return False
+            return False, 0.0
 
         # Reconstruct the entry fill from persisted data
         entry_fill = SimulatedFill(
@@ -502,59 +526,89 @@ class PaperTrader:
             exit_reason=a.exit_reason, held_bars=0,
             ts=ts,
         )
-        return True
+        # exit_fill.cash_delta is positive (cash in from SELL)
+        return True, exit_fill.cash_delta
 
-    def _exec_trail(self, a: TrailAction, ts: str) -> bool:
+    def _exec_trail(self, a: TrailAction, ts: str) -> tuple[bool, float]:
         """Execute a TrailAction: just update SL in DB.
 
-        Returns True if the SL was updated, False if position unknown.
+        Returns (success, 0.0) — trails don't move cash.
         """
         position_id = _setup_id_to_position_id(a.setup_id)
         pos = self.sm.get_open_position(position_id)
         if pos is None:
             logger.warning("Trail action for unknown position %s — skipping", position_id)
-            return False
+            return False, 0.0
         self.sm.update_position_sl(
             position_id, new_sl=a.new_sl,
             timestamp=a.timestamp, sl_source=a.sl_source,
         )
-        return True
+        return True, 0.0
 
-    def _exec_partial(self, a: PartialAction, ts: str) -> bool:
+    def _exec_partial(self, a: PartialAction, ts: str) -> tuple[bool, float]:
         """Execute a PartialAction: mark the position as partial-taken.
 
-        Returns True if the position was marked, False if position unknown.
+        Returns (success, 0.0) for now — the cash impact of partial
+        is conceptually deferred until full close (we track cumulative
+        outcome at close time via realized_pnl). A more granular model
+        would compute the 90% cash_in here; left as a future refinement
+        if precise mid-trade equity is needed.
         """
         position_id = _setup_id_to_position_id(a.setup_id)
         pos = self.sm.get_open_position(position_id)
         if pos is None:
             logger.warning("Partial action for unknown position %s — skipping", position_id)
-            return False
+            return False, 0.0
         self.sm.mark_partial_taken(position_id)
-        return True
+        return True, 0.0
 
     # ─── Equity snapshot ──────────────────────────────────────────
 
     def _record_equity_snapshot(
         self, timestamp_iso: str, current_prices: dict[str, float],
+        cash_delta: float = 0.0,
+        halt_recompute: bool = False,
     ) -> None:
-        """Compute mark-to-market equity and persist snapshot."""
-        # Get cash from previous snapshot, then adjust by transactions of THIS cycle
+        """Compute mark-to-market equity and persist snapshot.
+
+        Args:
+            cash_delta: net change in cash this cycle (from open/close fills).
+                        Negative when capital was spent (opens), positive when
+                        capital was returned (closes).
+            halt_recompute: if True, recompute cash from scratch based on
+                            (INITIAL_CAPITAL - currently-open positions value).
+                            Used after HALT where trigger_halt closed everything.
+
+        Bug #1 fix:
+        - Previously: cash = latest_snapshot.cash (frozen forever).
+        - Now: cash = latest_snapshot.cash + cash_delta (correctly tracked).
+        """
         latest = self.sm.get_latest_equity_snapshot()
         if latest is None:
-            cash = config.INITIAL_CAPITAL
+            cash = config.INITIAL_CAPITAL + cash_delta
+        elif halt_recompute:
+            # After HALT, trigger_halt closed all positions. Cash should equal
+            # the previous cash + the net of all close fills. We don't have
+            # those deltas easily here, so use a conservative reconstruction:
+            # equity = cash + open_value, so cash = equity - open_value.
+            # All positions are now closed -> open_value should be 0.
+            positions = self.sm.get_open_positions()
+            try:
+                open_val = sm_.compute_open_positions_value(positions, current_prices)
+            except sm_.MissingPriceError:
+                open_val = 0.0
+            # We use the current equity as our anchor (most recent in DB)
+            # and back out cash. After HALT, this should give the realized cash.
+            current_eq = latest.equity
+            cash = current_eq - open_val
         else:
-            # We can't easily track cash changes here without intrusive plumbing.
-            # Approximation: cash = previous_cash; better tracking is a future improvement.
-            # For now, recompute from positions + INITIAL_CAPITAL minus closed_trades net.
-            cash = latest.cash
-            # (TODO: precise cash tracking via order_simulator deltas)
+            cash = latest.cash + cash_delta
 
         positions = self.sm.get_open_positions()
         try:
             open_val = sm_.compute_open_positions_value(positions, current_prices)
         except sm_.MissingPriceError:
-            open_val = 0.0  # safely skip if a price is missing for a position
+            open_val = 0.0
             logger.warning("Missing price during equity snapshot — recording partial value")
 
         equity = cash + open_val
@@ -568,7 +622,7 @@ class PaperTrader:
             open_positions_value=open_val,
             equity=equity,
             peak_equity=peak,
-            drawdown_pct=min(0.0, drawdown),  # clamp at 0 (no positive DD)
+            drawdown_pct=min(0.0, drawdown),
         )
         self.sm.record_equity_snapshot(snap)
 

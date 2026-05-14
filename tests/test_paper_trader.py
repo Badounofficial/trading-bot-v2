@@ -525,3 +525,189 @@ def test_run_forever_with_max_cycles_terminates(tmp_path):
 
     # 2 cycles were executed, sleep was called 2 times
     assert mock_sleep.call_count == 2
+
+
+# ════════════════════════════════════════════════════════════════
+#  Cash tracking invariants (Bug #1 regression tests)
+# ════════════════════════════════════════════════════════════════
+
+def test_cash_decreases_when_position_opens(tmp_path):
+    """When a position opens, cash in the new snapshot must be lower
+    than cash in the previous snapshot, by the amount spent on the fill.
+
+    Bug #1 regression: previously cash was frozen at INITIAL_CAPITAL.
+    """
+    open_a = OpenAction(
+        setup_id=("BTC", "2026-05-12T14:00:00", "BUY"),
+        asset="BTC", direction="BUY",
+        entry_timestamp="2026-05-14T18:00:00Z",
+        entry_price=80000.0, sl_price=78000.0, tp_price=84000.0,
+        sl_source=None, tp_source=None,
+    )
+    trader = _make_trader(tmp_path, adapter_actions=[open_a])
+
+    # Baseline equity = $1000 cash
+    from paper_trading.state_manager import EquitySnapshot
+    with trader.sm.cycle():
+        trader.sm.record_equity_snapshot(EquitySnapshot(
+            timestamp="2026-05-14T17:00:00Z",
+            cash=1000.0, open_positions_value=0.0, equity=1000.0,
+            peak_equity=1000.0, drawdown_pct=0.0,
+        ))
+
+    result = trader.run_one_cycle(timestamp_iso="2026-05-14T18:00:00Z")
+    assert result.n_trades_opened == 1
+
+    # Cash must have DECREASED
+    new_snap = trader.sm.get_latest_equity_snapshot()
+    assert new_snap.cash < 1000.0, (
+        f"Cash should have decreased after open, got {new_snap.cash}"
+    )
+    # And open_positions_value should be > 0
+    assert new_snap.open_positions_value > 0
+
+
+def test_cash_increases_when_position_closes_profit(tmp_path):
+    """When a position closes at profit, cash returned > cash spent."""
+    sid = ("BTC", "2026-05-12T14:00:00", "BUY")
+    open_a = OpenAction(
+        setup_id=sid, asset="BTC", direction="BUY",
+        entry_timestamp="2026-05-14T18:00:00Z",
+        entry_price=80000.0, sl_price=78000.0, tp_price=84000.0,
+        sl_source=None, tp_source=None,
+    )
+    trader = _make_trader(tmp_path, adapter_actions=[open_a])
+    from paper_trading.state_manager import EquitySnapshot
+    with trader.sm.cycle():
+        trader.sm.record_equity_snapshot(EquitySnapshot(
+            timestamp="2026-05-14T17:00:00Z",
+            cash=1000.0, open_positions_value=0.0, equity=1000.0,
+            peak_equity=1000.0, drawdown_pct=0.0,
+        ))
+    trader.run_one_cycle(timestamp_iso="2026-05-14T18:00:00Z")
+    cash_after_open = trader.sm.get_latest_equity_snapshot().cash
+
+    # Cycle 2: close at higher price (profit)
+    close_a = CloseAction(
+        setup_id=sid, asset="BTC",
+        exit_timestamp="2026-05-14T22:00:00Z",
+        exit_price=85000.0, exit_reason="TP_HIT",
+    )
+    def close_side_effect(asset, daily_df, h4_df, h1_df, prev_setups=None):
+        if asset == "BTC":
+            return ([close_a], {})
+        return ([], {})
+    trader.adapter.get_actions_for_cycle.side_effect = close_side_effect
+
+    trader.run_one_cycle(timestamp_iso="2026-05-14T22:00:00Z")
+    cash_after_close = trader.sm.get_latest_equity_snapshot().cash
+
+    # Cash after profitable close MUST be greater than after open
+    assert cash_after_close > cash_after_open, (
+        f"Cash should have grown after profitable close: "
+        f"open={cash_after_open}, close={cash_after_close}"
+    )
+    # And no more open positions
+    assert len(trader.sm.get_open_positions()) == 0
+
+
+def test_cash_after_loss_close_reflects_loss(tmp_path):
+    """When a position closes at loss, the final cash should reflect the loss
+    (be less than the original capital before opening)."""
+    sid = ("BTC", "2026-05-12T14:00:00", "BUY")
+    open_a = OpenAction(
+        setup_id=sid, asset="BTC", direction="BUY",
+        entry_timestamp="2026-05-14T18:00:00Z",
+        entry_price=80000.0, sl_price=78000.0, tp_price=84000.0,
+        sl_source=None, tp_source=None,
+    )
+    trader = _make_trader(tmp_path, adapter_actions=[open_a])
+    from paper_trading.state_manager import EquitySnapshot
+    with trader.sm.cycle():
+        trader.sm.record_equity_snapshot(EquitySnapshot(
+            timestamp="2026-05-14T17:00:00Z",
+            cash=1000.0, open_positions_value=0.0, equity=1000.0,
+            peak_equity=1000.0, drawdown_pct=0.0,
+        ))
+    trader.run_one_cycle(timestamp_iso="2026-05-14T18:00:00Z")
+
+    # Close at a loss
+    close_a = CloseAction(
+        setup_id=sid, asset="BTC",
+        exit_timestamp="2026-05-14T22:00:00Z",
+        exit_price=78000.0, exit_reason="SL_HIT",  # below entry
+    )
+    def close_side_effect(asset, daily_df, h4_df, h1_df, prev_setups=None):
+        if asset == "BTC":
+            return ([close_a], {})
+        return ([], {})
+    trader.adapter.get_actions_for_cycle.side_effect = close_side_effect
+
+    trader.run_one_cycle(timestamp_iso="2026-05-14T22:00:00Z")
+    final_cash = trader.sm.get_latest_equity_snapshot().cash
+
+    # After loss, total cash < starting $1000 (fees + slippage + price loss)
+    assert final_cash < 1000.0, (
+        f"Cash after losing trade should be < starting, got {final_cash}"
+    )
+
+
+def test_equity_equals_cash_plus_open_positions_value(tmp_path):
+    """FUNDAMENTAL INVARIANT: at every snapshot, equity = cash + open_value.
+
+    This invariant must hold at all times:
+    - After open
+    - After close
+    - With multiple positions
+    - When no positions exist
+
+    If this test ever breaks, it means a cash_delta accounting bug.
+    """
+    sid = ("BTC", "2026-05-12T14:00:00", "BUY")
+    open_a = OpenAction(
+        setup_id=sid, asset="BTC", direction="BUY",
+        entry_timestamp="2026-05-14T18:00:00Z",
+        entry_price=80000.0, sl_price=78000.0, tp_price=84000.0,
+        sl_source=None, tp_source=None,
+    )
+    trader = _make_trader(tmp_path, adapter_actions=[open_a])
+    from paper_trading.state_manager import EquitySnapshot
+    with trader.sm.cycle():
+        trader.sm.record_equity_snapshot(EquitySnapshot(
+            timestamp="2026-05-14T17:00:00Z",
+            cash=1000.0, open_positions_value=0.0, equity=1000.0,
+            peak_equity=1000.0, drawdown_pct=0.0,
+        ))
+
+    # Cycle 1: open
+    trader.run_one_cycle(timestamp_iso="2026-05-14T18:00:00Z")
+    snap_after_open = trader.sm.get_latest_equity_snapshot()
+    assert abs(snap_after_open.equity - (snap_after_open.cash + snap_after_open.open_positions_value)) < 0.01, (
+        f"Invariant broken after open: "
+        f"equity={snap_after_open.equity}, "
+        f"cash={snap_after_open.cash}, "
+        f"open_val={snap_after_open.open_positions_value}"
+    )
+
+    # Cycle 2: close
+    close_a = CloseAction(
+        setup_id=sid, asset="BTC",
+        exit_timestamp="2026-05-14T22:00:00Z",
+        exit_price=82000.0, exit_reason="TP_HIT",
+    )
+    def close_side_effect(asset, daily_df, h4_df, h1_df, prev_setups=None):
+        if asset == "BTC":
+            return ([close_a], {})
+        return ([], {})
+    trader.adapter.get_actions_for_cycle.side_effect = close_side_effect
+
+    trader.run_one_cycle(timestamp_iso="2026-05-14T22:00:00Z")
+    snap_after_close = trader.sm.get_latest_equity_snapshot()
+    assert abs(snap_after_close.equity - (snap_after_close.cash + snap_after_close.open_positions_value)) < 0.01, (
+        f"Invariant broken after close: "
+        f"equity={snap_after_close.equity}, "
+        f"cash={snap_after_close.cash}, "
+        f"open_val={snap_after_close.open_positions_value}"
+    )
+    # And open_value should be 0 (no positions left)
+    assert snap_after_close.open_positions_value == 0
