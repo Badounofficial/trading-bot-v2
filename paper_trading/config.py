@@ -26,7 +26,12 @@ PAPER_TRADING_DIR = PROJECT_ROOT / "paper_trading"
 LOGS_DIR = PAPER_TRADING_DIR / "logs"
 STATE_DB_PATH = PAPER_TRADING_DIR / "state.db"
 
+# Backup paths (Niveau 2 + 3: local snapshots + Telegram sync)
+BACKUPS_DIR = PAPER_TRADING_DIR / "backups"
+LAST_TELEGRAM_BACKUP_FILE = PAPER_TRADING_DIR / ".last_telegram_backup"
+
 LOGS_DIR.mkdir(parents=True, exist_ok=True)
+BACKUPS_DIR.mkdir(parents=True, exist_ok=True)
 
 
 # ════════════════════════════════════════════════════════════════
@@ -141,6 +146,24 @@ LOG_LEVEL = env("LOG_LEVEL", "INFO")
 HEARTBEAT_HOUR_UTC = 12
 WEEKLY_RECAP_DAY = 6   # 0=Monday, 6=Sunday
 WEEKLY_RECAP_HOUR = 21
+
+
+# ════════════════════════════════════════════════════════════════
+#                    BACKUP (Niveau 2 + 3)
+# ════════════════════════════════════════════════════════════════
+
+# Niveau 2 — Local rotating snapshots (after each successful cycle)
+#
+# Snapshots are taken AFTER each cycle's transaction commits (in
+# paper_trader._post_cycle_backup). They are NOT taken mid-cycle in
+# _exec_close because the SQLite transaction is still open — a snapshot
+# would capture incoherent state. The post-cycle snapshot already
+# captures all closes of the cycle anyway.
+BACKUP_MAX_KEEP = 24            # Garde les N derniers snapshots locaux (24 = 1 jour de cycles H1)
+
+# Niveau 3 — Telegram backup (granularité 6h)
+TELEGRAM_BACKUP_HOURS_UTC = [0, 6, 12, 18]   # Envoi DB sur Telegram à ces heures UTC
+TELEGRAM_BACKUP_ENABLED = True   # Si True ET TELEGRAM_* set dans .env → envoi automatique
 
 
 # ════════════════════════════════════════════════════════════════

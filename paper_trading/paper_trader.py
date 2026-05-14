@@ -54,6 +54,7 @@ from paper_trading.state_manager import (
 )
 from paper_trading.monitoring import Monitor
 from paper_trading.order_simulator import SimulatedFill
+from paper_trading.backup import BackupManager
 from strategies.strategy_adapter import (
     IccStrategyAdapter,
     OpenAction, CloseAction, TrailAction, PartialAction,
@@ -150,6 +151,7 @@ class PaperTrader:
         adapter: Optional[IccStrategyAdapter] = None,
         data_fetcher: Optional[Callable[[], dict[str, pd.DataFrame]]] = None,
         assets: Optional[list[str]] = None,
+        backup_manager: Optional[BackupManager] = None,
     ):
         """Inject dependencies (all optional, defaults to production).
 
@@ -161,6 +163,9 @@ class PaperTrader:
                           Default = ds.fetch_all_assets_h1 (live Kraken).
                           Can be mocked for tests.
             assets: list of assets to trade (default: config.ASSETS)
+            backup_manager: BackupManager for snapshots + Telegram backup.
+                           Default: BackupManager() with config defaults.
+                           Pass None or a no-op manager to disable.
         """
         self.sm = state_manager if state_manager is not None else StateManager()
         self.monitor = monitor if monitor is not None else Monitor()
@@ -169,6 +174,9 @@ class PaperTrader:
             lambda: ds.fetch_all_assets_h1(n_bars=config.ROLLING_BUFFER_SIZE)
         )
         self.assets = assets if assets is not None else list(config.ASSETS)
+        self.backup_manager = (
+            backup_manager if backup_manager is not None else BackupManager()
+        )
 
     # ═══════════════════════════════════════════════════════════
     #                CORE LOGIC : 1 cycle
@@ -315,8 +323,30 @@ class PaperTrader:
             self._maybe_send_heartbeat(timestamp_iso)
             self._maybe_send_weekly_recap(timestamp_iso)
 
+        # ── 10. Backup (Niveaux 2 + 3) ──
+        # Run AFTER the transaction has committed so the snapshot captures
+        # the latest state. Fail-soft: never breaks the cycle.
+        if result.success:
+            self._post_cycle_backup(timestamp_iso)
+
         result.cycle_duration_seconds = time.time() - t0
         return result
+
+    def _post_cycle_backup(self, timestamp_iso: str) -> None:
+        """Take a local snapshot and optionally send to Telegram.
+
+        Called after each successful cycle. Both operations are fail-soft:
+        backup failures are logged but never break the trading bot.
+        """
+        try:
+            self.backup_manager.snapshot(timestamp_iso=timestamp_iso)
+        except Exception:
+            logger.exception("Local snapshot failed (non-fatal)")
+
+        try:
+            self.backup_manager.maybe_send_to_telegram(timestamp_iso=timestamp_iso)
+        except Exception:
+            logger.exception("Telegram backup failed (non-fatal)")
 
     # ─── Asset processing ─────────────────────────────────────────
 

@@ -94,12 +94,24 @@ def _make_trader(
     def fake_fetcher():
         return {"BTC": _fake_h1_df(50, 80000.0), "ETH": _fake_h1_df(50, 2200.0)}
 
+    # Backup manager scoped to tmp (no pollution of project backups/)
+    from paper_trading.backup import BackupManager
+    test_backup_dir = tmp_path / "backups"
+    test_backup_dir.mkdir(exist_ok=True)
+    backup_manager = BackupManager(
+        db_path=db_path,
+        backup_dir=test_backup_dir,
+        max_keep=10,
+        telegram_enabled=False,
+    )
+
     return PaperTrader(
         state_manager=sm,
         monitor=monitor,
         adapter=mock_adapter,
         data_fetcher=fake_fetcher,
         assets=["BTC", "ETH"],
+        backup_manager=backup_manager,
     )
 
 

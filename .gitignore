@@ -47,3 +47,5 @@ paper_trading/logs/*.log
 paper_trading/logs/*.json
 !paper_trading/logs/.gitkeep
 !paper_trading/logs/
+paper_trading/backups/
+paper_trading/.last_telegram_backup
