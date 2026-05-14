@@ -133,10 +133,19 @@ def create_snapshot(
         return SnapshotResult(ok=False, error=f"DB not found: {db_path}")
 
     if timestamp_iso is None:
-        timestamp_iso = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        # Strip microseconds for clean filename (e.g. .988448 → nothing)
+        timestamp_iso = (
+            datetime.now(timezone.utc)
+            .replace(microsecond=0)
+            .isoformat()
+            .replace("+00:00", "Z")
+        )
 
     # Sanitize timestamp for filesystem (": → -")
     ts_safe = timestamp_iso.replace(":", "-").replace("+00-00Z", "Z").rstrip("Z")
+    # Also strip any leftover microsecond fragment "T21-58-16.988448" → "T21-58-16"
+    if "." in ts_safe:
+        ts_safe = ts_safe.split(".")[0]
     out_path = backup_dir / f"state_{ts_safe}.db.gz"
 
     try:

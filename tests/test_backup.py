@@ -95,6 +95,31 @@ def test_create_snapshot_default_timestamp_uses_now(tmp_path):
     assert "20" in result.path.name
 
 
+def test_create_snapshot_strips_microseconds_from_filename(tmp_path):
+    """Filename should NOT contain microsecond fragments like .988448."""
+    db = tmp_path / "state.db"
+    _make_fake_db(db)
+    backup_dir = tmp_path / "backups"
+
+    # Pass an ISO timestamp WITH microseconds
+    result = create_snapshot(
+        db, backup_dir,
+        timestamp_iso="2026-05-14T21:58:16.988448Z",
+    )
+    assert result.ok is True
+    # Filename should NOT contain the microsecond part
+    assert ".988448" not in result.path.name
+    # But the time portion should still be present
+    assert "T21-58-16" in result.path.name
+
+    # Default timestamp (None) should also be clean
+    result2 = create_snapshot(db, backup_dir, timestamp_iso=None)
+    assert result2.ok is True
+    # The auto-generated filename should have no decimal point in time portion
+    stem = result2.path.name.replace("state_", "").replace(".db.gz", "")
+    assert "." not in stem, f"Filename has unexpected '.' in stem: {stem}"
+
+
 # ════════════════════════════════════════════════════════════════
 #                    rotate_local_snapshots
 # ════════════════════════════════════════════════════════════════
