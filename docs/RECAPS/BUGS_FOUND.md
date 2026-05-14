@@ -1,10 +1,12 @@
-# BUGS FOUND — Session 6b Bloc 8 (Test A — Dry Run E2E)
+# BUGS FOUND — Session 6b Bloc 8 (Test A — Dry Run E2E) — ✅ ALL RESOLVED Session 7
 
-> **Date** : 14 mai 2026, ~5h du matin
+> **Status (mis à jour 14 mai 2026 après-midi)** : ✅ TOUS LES 3 BUGS RÉSOLUS
+> **Date découverte** : 14 mai 2026, ~5h du matin (Session 6b)
+> **Date résolution** : 14 mai 2026, après-midi (Session 7)
 > **Découvert lors de** : `python -m scripts.dry_run_48h` (premier test E2E avec vraie data Kraken)
-> **Statut commit projet** : `abd9097` (dry_run_48h.py script) — `git status` clean
-> **Tests verts** : 314/314 sur unitaires (Bloc 7 commité), mais E2E révèle des bugs d'intégration
-> **Principe à appliquer** : "Si on voit un bug, on prend le temps de le résoudre. Deux fois la même erreur = négligence."
+> **Commits de résolution** : `c940a5e` (Bug 3 + Bug 2) + `9c9bd5a` (Bug 1)
+> **Tests verts au final** : 321/321 — voir section RÉSOLUTION en bas du document
+> **Principe appliqué** : "Si on voit un bug, on prend le temps de le résoudre. Deux fois la même erreur = négligence."
 
 ---
 
@@ -307,4 +309,138 @@ Quand Badoun reviendra (probablement le 14 mai après-midi ou le 15 mai au matin
 ---
 
 *Document généré le 14 mai 2026, ~5h15 du matin, après ~4h de session productive.*
-*Statut : prêt pour reprise demain matin frais.*
+*Statut initial : prêt pour reprise demain matin frais.*
+*Statut final : mis à jour 14 mai 2026 après-midi — TOUS LES BUGS FIXÉS — voir section ci-dessous.*
+
+---
+
+# ✅ RÉSOLUTION — Session 7 (14 mai 2026 après-midi)
+
+## 🎯 Vue d'ensemble
+
+| Bug | Status | Commit | Tests ajoutés |
+|---|---|---|---|
+| **Bug 3** (identity + ordering) | ✅ RÉSOLU | `c940a5e` | +4 (incl. test régression critique) |
+| **Bug 2** (counters) | ✅ RÉSOLU | `c940a5e` | +1 assertion |
+| **Bug 1** (cash tracking) | ✅ RÉSOLU | `9c9bd5a` | +4 invariants |
+
+**Tests verts au final** : 321/321 (était 314 avant les fixes)
+
+**Validation E2E** : `python -m scripts.dry_run_48h` après les fixes affiche :
+
+```
+Opens=3, Closes=3, Open positions=0, Closed trades=3 (cohérent)
+Final equity: $993.31 = $1000.00 - $6.69 (somme des PnL des 3 trades) ✅
+0 warning "Close action for unknown position" ✅
+```
+
+---
+
+## 🐛 Bug 3 — DEUX SOUS-BUGS DÉCOUVERTS
+
+### Bug 3a — Setup identity (initialement diagnostiqué)
+**Fix** : `setup_id` utilise `confirmed_at_ts` (pd.Timestamp stable) au lieu de `bar_index` (position instable dans DataFrame).
+
+- `SetupId` type : `tuple[str, int, str]` → `tuple[str, str, str]` (timestamp ISO)
+- Format `position_id` : `BTC_152_BUY` → `BTC__2026-05-12T14-00-00__BUY` (`:` remplacé par `-` pour file paths)
+
+### Bug 3b — Open/Close ordering (DÉCOUVERT pendant la résolution de 3a)
+
+Après fix 3a, le dry run montrait **toujours** 3 warnings "unknown position" et 3 positions fantômes en DB.
+
+**Cause** : ICC peut émettre **simultanément** `Open` + `Close` pour le **même** setup_id (cas `opened_and_closed_same_cycle` quand ICC voit le cycle complet d'un trade dans la fenêtre visible). Le code traitait tous les Closes AVANT les Opens (pour libérer du capital) — donc le Close arrivait avant que l'Open ne crée la position.
+
+**Fix** : refactor de `_process_asset` pour traiter les setups "open+close paired" séquentiellement (Open puis Close), tout en gardant l'ordre "closes seuls avant opens seuls" pour libérer du capital.
+
+**Tests régression critiques** :
+- `test_setup_id_stable_when_bar_index_changes` (strategy_adapter) — simule exactement le bug originel
+- `test_open_and_close_same_cycle_processed_in_order` (paper_trader) — simule le cas open+close même cycle
+
+### Leçon Bug 3
+Un bug peut avoir **plusieurs causes racines**. On a découvert la 2ème cause uniquement parce qu'on a **re-run le dry run** après le fix 3a — les warnings n'étaient pas partis. Si on avait sauté la re-validation E2E, le bug serait resté.
+
+---
+
+## 🐛 Bug 2 — Counter accuracy
+
+**Fix** : Les 4 méthodes `_exec_*` retournent maintenant `tuple[bool, float]` (success + cash_delta). Les callers dans `_process_asset` n'incrémentent les compteurs que sur success.
+
+Avant : `result.n_trades_closed += 1` même si `_exec_close` skip
+Après : `if self._exec_close(...): result.n_trades_closed += 1`
+
+**Folded** dans le commit Bug 3 parce que les retours bool étaient déjà nécessaires pour le fix Bug 3b.
+
+---
+
+## 🐛 Bug 1 — Cash tracking (le plus délicat)
+
+### Architecture choisie : cash_delta accumulator pattern
+
+Les 4 `_exec_*` retournent leur `cash_delta` issu de `SimulatedFill.cash_delta` (déjà calculé par order_simulator) :
+- `_exec_open` : delta négatif (cash out for BUY)
+- `_exec_close` : delta positif (cash in from SELL)
+- `_exec_trail` : 0.0 (pas de mouvement de cash)
+- `_exec_partial` : 0.0 (impact différé au close, simplification documentée)
+
+`_process_asset` accumule sur tous ses actions et retourne le total pour l'asset.
+
+`run_one_cycle` somme les deltas des assets et passe le total à `_record_equity_snapshot`.
+
+`_record_equity_snapshot` calcule : `cash = prev_cash + cash_delta_total`.
+
+### Cas spécial HALT
+
+`trigger_halt` ferme les positions **directement** via state_manager (pas via `_exec_close`). Donc pas de cash_delta accumulé pour ces fermetures. Solution : mode `halt_recompute=True` qui recalcule cash en backing-out depuis l'equity (`cash = equity - open_value`).
+
+### Tests d'invariants
+
+| Test | Vérifie |
+|---|---|
+| `test_cash_decreases_when_position_opens` | cash baisse après open |
+| `test_cash_increases_when_position_closes_profit` | cash monte après close profitable |
+| `test_cash_after_loss_close_reflects_loss` | cash baisse globalement après close en perte |
+| `test_equity_equals_cash_plus_open_positions_value` | **INVARIANT FONDAMENTAL** : equity = cash + open_value à tous les snapshots |
+
+Le 4ème test est le **filet de sécurité absolu** pour la comptabilité du bot.
+
+---
+
+## 📊 Métriques avant/après
+
+| Métrique | Bug 3 dry run | Après Bug 3 + 2 | Après Bug 1 |
+|---|---|---|---|
+| Warnings "unknown position" | 12 | 3 | 0 ✅ |
+| Opens / Closes | 12 / 12 | 3 / 3 | 3 / 3 |
+| Open positions au final | 12 ❌ | 0 ✅ | 0 ✅ |
+| Closed trades en DB | 0 ❌ | 3 ✅ | 3 ✅ |
+| Final equity | $2446.99 ❌ | $1000.00 ❌ (toujours frozen) | $993.31 ✅ |
+| PnL affiché | +144.70% ❌ | +0.00% ❌ | -0.67% ✅ |
+| Cohérence equity vs trades | Aucune | Aucune | Exacte ✅ |
+
+---
+
+## 🎓 Leçons de Session 7
+
+1. **Le dry run E2E est inestimable.** Aucun des 3 bugs n'était détectable par les tests unitaires — chacun touchait à l'**intégration** entre modules. Sans test E2E, le bot aurait silencieusement mal fonctionné en prod.
+
+2. **Re-tester après chaque fix.** Bug 3a fixé, dry run = warnings encore là. Si on n'avait pas re-run, Bug 3b serait resté caché. Discipline absolue : **chaque fix → re-validation E2E**.
+
+3. **Un identifiant doit être stable par construction, pas par hasard.** `bar_index` "marchait" parce que les fenêtres avaient toujours la même taille — jusqu'au moment où elles ont glissé. `confirmed_at_ts` est stable parce qu'il **n'est pas du tout lié** à la structure de données utilisée pour l'access.
+
+4. **Les invariants comptables sont sacrés.** `equity = cash + open_positions_value` à TOUS les moments. Un test qui vérifie ça est le meilleur filet de sécurité pour un bot de trading. Si jamais il casse, on sait IMMÉDIATEMENT.
+
+5. **"On ne va pas vite" paie cash.** Cette session aurait pu être 30 min de patches bâclés (renommer une variable, ignorer un warning). Au lieu de ça, c'est 3-4h de fixes propres avec **9 tests régression** qui protègent le projet pour des années.
+
+---
+
+## ⏭️ Prochaines étapes (Session 8+ ou suite)
+
+1. **Bloc 9 — `AUDIT_SESSION_7.md`** : documentation auditée des fixes
+2. **Test B — Dry run LIVE** : `run_forever()` 1-2 cycles en vrai sur Kraken
+3. **Lancement bot production** : décision de lancement et monitoring initial
+4. **Voyage de 10 jours** : bot tournant en autonomie
+
+---
+
+*Document de résolution généré le 14 mai 2026 après-midi.*
+*Tous les bugs critiques documentés ici sont résolus avec tests de régression en place.*
