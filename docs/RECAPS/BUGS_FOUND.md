@@ -45,6 +45,17 @@ ligne 796:    bar = h4_prices.iloc[s.bar_index]
 ligne 922:    obs_by_struct_bar = {ob.structure_broken.bar_index: ob ...}
 ```
 
+**CONFIRMÉ** : Dans `strategies/icc_structure.py` ligne 63, le commentaire est explicite :
+```python
+class StructurePoint:
+    bar_index: int                     # absolute index in input DataFrame
+    confirmed_at_bar: int              # the bar at which we could "see" this swing
+```
+
+Tous les champs `*_bar_index` sont des positions dans le DataFrame, donc **instables** quand la fenêtre glisse.
+
+**Bonne nouvelle** : `StructurePoint` semble aussi avoir un `confirmed_at_ts` (timestamp) — vu dans `icc_cycle.py` ligne 945 : `h4_confirmed_ts = h4_indic.confirmed_at_ts`. À vérifier dans `icc_structure.py` complet la prochaine session.
+
 ### Conséquence
 
 - **Cycle T** : DataFrame H4 a 168 bars (672 H1 ÷ 4). Une structure est à `bar_index = 152`.
