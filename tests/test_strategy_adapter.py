@@ -8,6 +8,11 @@ REAL ICC state machine (verified by reading strategies/icc_cycle.py):
 A setup is in OPEN POSITION iff state == IN_TRADE.
 A setup is a CLOSED TRADE iff state == COOLDOWN AND entry_price is not None.
 A setup in COOLDOWN with entry_price=None = died pre-entry, NOT a trade.
+
+IDENTITY (Bug #3 fix from Session 6b dry run E2E):
+setup_id is now based on h4_indication.confirmed_at_ts (a timestamp)
+NOT on bar_index (a DataFrame position). confirmed_at_ts is stable
+across cycles even when the H1 window slides.
 """
 from __future__ import annotations
 
@@ -34,13 +39,21 @@ from strategies.icc_cycle import (
 )
 
 
-def _fake_h4_indication(bar_index: int):
+# Default canonical timestamp used in fixtures
+_DEFAULT_TS = pd.Timestamp("2026-05-12T14:00:00")
+
+
+def _fake_h4_indication(bar_index: int = 100,
+                       confirmed_at_ts: pd.Timestamp = _DEFAULT_TS):
+    """Build a fake StructurePoint with both bar_index (for ICC internals)
+    and confirmed_at_ts (the new stable identifier).
+    """
     @dataclass
     class FakeStructurePoint:
         bar_index: int = 0
         type: str = "NEW_HIGH"
-        confirmed_at_ts: object = None
-    return FakeStructurePoint(bar_index=bar_index)
+        confirmed_at_ts: pd.Timestamp = _DEFAULT_TS
+    return FakeStructurePoint(bar_index=bar_index, confirmed_at_ts=confirmed_at_ts)
 
 
 def _fake_h4_ob():
@@ -49,19 +62,23 @@ def _fake_h4_ob():
     return FakeOB()
 
 
-def _scanning_setup(asset="BTC", h4_bar=100, direction=Direction.BUY) -> TradeSetup:
+def _scanning_setup(asset="BTC", h4_bar=100, direction=Direction.BUY,
+                     confirmed_at_ts=_DEFAULT_TS) -> TradeSetup:
     return TradeSetup(
         asset=asset, mode=TradeMode.SWING, direction=direction,
         state=TradeState.SCANNING, created_at_bar=h4_bar,
         daily_bias=None,
-        h4_indication=_fake_h4_indication(h4_bar), h4_ob=_fake_h4_ob(),
+        h4_indication=_fake_h4_indication(h4_bar, confirmed_at_ts),
+        h4_ob=_fake_h4_ob(),
         impulse_low=80000.0, impulse_high=82000.0, fibo_50=81000.0,
     )
 
 
 def _in_trade_setup(asset="BTC", h4_bar=100, entry_price=81500.0,
-                     sl=80500.0, tp=84000.0, direction=Direction.BUY) -> TradeSetup:
-    s = _scanning_setup(asset=asset, h4_bar=h4_bar, direction=direction)
+                     sl=80500.0, tp=84000.0, direction=Direction.BUY,
+                     confirmed_at_ts=_DEFAULT_TS) -> TradeSetup:
+    s = _scanning_setup(asset=asset, h4_bar=h4_bar, direction=direction,
+                         confirmed_at_ts=confirmed_at_ts)
     s.state = TradeState.IN_TRADE
     s.entry_bar = 105
     s.entry_price = entry_price
@@ -77,10 +94,12 @@ def _in_trade_setup(asset="BTC", h4_bar=100, entry_price=81500.0,
 
 def _closed_trade_setup(asset="BTC", h4_bar=100, entry_price=81500.0,
                         exit_price=84000.0, exit_reason=ExitReason.TP_HIT,
-                        direction=Direction.BUY) -> TradeSetup:
+                        direction=Direction.BUY,
+                        confirmed_at_ts=_DEFAULT_TS) -> TradeSetup:
     """COOLDOWN with entry_price filled = real closed trade."""
     s = _in_trade_setup(asset=asset, h4_bar=h4_bar,
-                        entry_price=entry_price, direction=direction)
+                        entry_price=entry_price, direction=direction,
+                        confirmed_at_ts=confirmed_at_ts)
     s.state = TradeState.COOLDOWN
     s.exit_bar = 130
     s.exit_price = exit_price
@@ -89,30 +108,50 @@ def _closed_trade_setup(asset="BTC", h4_bar=100, entry_price=81500.0,
     return s
 
 
-def _dead_pre_entry_setup(asset="BTC", h4_bar=100, direction=Direction.BUY) -> TradeSetup:
+def _dead_pre_entry_setup(asset="BTC", h4_bar=100, direction=Direction.BUY,
+                          confirmed_at_ts=_DEFAULT_TS) -> TradeSetup:
     """COOLDOWN without entry — setup died before triggering. NOT a trade."""
-    s = _scanning_setup(asset=asset, h4_bar=h4_bar, direction=direction)
+    s = _scanning_setup(asset=asset, h4_bar=h4_bar, direction=direction,
+                         confirmed_at_ts=confirmed_at_ts)
     s.state = TradeState.COOLDOWN
-    # entry_price stays None
     s.exit_bar = 130
     s.exit_timestamp = pd.Timestamp("2026-05-14T22:00:00Z")
     s.exit_reason = ExitReason.SL_HIT
     return s
 
 
-# ─── setup_id ─────────────────────────────────────────────────────
+# ════════════════════════════════════════════════════════════════
+#  setup_id (NEW FORMAT: tuple[str, str, str] with timestamp)
+# ════════════════════════════════════════════════════════════════
 
-def test_setup_id_is_tuple():
-    s = _scanning_setup(asset="BTC", h4_bar=100, direction=Direction.BUY)
-    assert setup_id(s) == ("BTC", 100, "BUY")
+def test_setup_id_is_tuple_with_timestamp():
+    """New format: (asset, confirmed_at_ts ISO, direction)."""
+    ts = pd.Timestamp("2026-05-12T14:00:00")
+    s = _scanning_setup(asset="BTC", confirmed_at_ts=ts, direction=Direction.BUY)
+    sid = setup_id(s)
+    assert sid == ("BTC", "2026-05-12T14:00:00", "BUY")
+
+
+def test_setup_id_strips_timezone():
+    """A tz-aware timestamp should produce the same identifier as its tz-naive."""
+    ts_aware = pd.Timestamp("2026-05-12T14:00:00Z")
+    ts_naive = pd.Timestamp("2026-05-12T14:00:00")
+    s_aware = _scanning_setup(asset="BTC", confirmed_at_ts=ts_aware)
+    s_naive = _scanning_setup(asset="BTC", confirmed_at_ts=ts_naive)
+    assert setup_id(s_aware) == setup_id(s_naive)
 
 
 def test_setup_id_distinguishes_assets():
     assert setup_id(_scanning_setup("BTC", 100)) != setup_id(_scanning_setup("ETH", 100))
 
 
-def test_setup_id_distinguishes_h4_bars():
-    assert setup_id(_scanning_setup("BTC", 100)) != setup_id(_scanning_setup("BTC", 200))
+def test_setup_id_distinguishes_timestamps():
+    """Different confirmed_at_ts → different setup_id."""
+    ts_a = pd.Timestamp("2026-05-12T14:00:00")
+    ts_b = pd.Timestamp("2026-05-12T18:00:00")
+    s_a = _scanning_setup("BTC", confirmed_at_ts=ts_a)
+    s_b = _scanning_setup("BTC", confirmed_at_ts=ts_b)
+    assert setup_id(s_a) != setup_id(s_b)
 
 
 def test_setup_id_distinguishes_directions():
@@ -121,7 +160,44 @@ def test_setup_id_distinguishes_directions():
     assert setup_id(a) != setup_id(b)
 
 
-# ─── Predicates ───────────────────────────────────────────────────
+# ════════════════════════════════════════════════════════════════
+#  CRITICAL REGRESSION TEST — Bug #3 specifically
+# ════════════════════════════════════════════════════════════════
+
+def test_setup_id_stable_when_bar_index_changes():
+    """Regression test for Bug #3 found in Session 6b dry run E2E.
+
+    When the H1 window slides by 1 bar between cycles, the bar_index
+    of the same real structure SHIFTS (e.g. from 152 to 151) because
+    bar_index is a POSITION in the DataFrame, not an absolute identifier.
+
+    The setup_id MUST remain identical across cycles, otherwise the
+    adapter creates duplicate Opens and emits Closes for non-existent
+    positions.
+
+    This test simulates the exact scenario observed in the dry run
+    where 12 Opens and 12 Closes happened without ever closing a trade.
+    """
+    confirmed_ts = pd.Timestamp("2026-05-12T14:00:00")
+
+    # Cycle T: same real structure, position 152 in the DataFrame
+    setup_at_t = _in_trade_setup(asset="BTC", direction=Direction.BUY,
+                                  h4_bar=152, confirmed_at_ts=confirmed_ts)
+
+    # Cycle T+1: SAME real structure but window slid → position 151
+    setup_at_t1 = _in_trade_setup(asset="BTC", direction=Direction.BUY,
+                                   h4_bar=151, confirmed_at_ts=confirmed_ts)
+
+    # The setup_ids MUST be identical (same real-world structure)
+    assert setup_id(setup_at_t) == setup_id(setup_at_t1), (
+        "Setup identity must be stable across cycles even when "
+        "bar_index changes (Bug #3 regression)"
+    )
+
+
+# ════════════════════════════════════════════════════════════════
+#  Predicates
+# ════════════════════════════════════════════════════════════════
 
 def test_predicate_in_trade_is_open():
     s = _in_trade_setup()
@@ -147,7 +223,9 @@ def test_predicate_scanning_is_neither():
     assert IccStrategyAdapter._is_closed_trade(s) is False
 
 
-# ─── diff: OPEN ───────────────────────────────────────────────────
+# ════════════════════════════════════════════════════════════════
+#  diff: OPEN
+# ════════════════════════════════════════════════════════════════
 
 def test_diff_empty_to_empty_no_actions():
     assert IccStrategyAdapter.diff_setups({}, {}, "BTC") == []
@@ -181,19 +259,22 @@ def test_diff_setup_already_in_trade_no_open_action():
 
 
 def test_diff_dead_pre_entry_no_open():
-    """Setup straight to COOLDOWN without entering → no Open."""
     s = _dead_pre_entry_setup()
     sid = setup_id(s)
     actions = IccStrategyAdapter.diff_setups({}, {sid: s}, "BTC")
     assert [a for a in actions if isinstance(a, OpenAction)] == []
 
 
-# ─── diff: CLOSE ──────────────────────────────────────────────────
+# ════════════════════════════════════════════════════════════════
+#  diff: CLOSE
+# ════════════════════════════════════════════════════════════════
 
 def test_diff_in_trade_to_closed_emits_close():
     prev_s = _in_trade_setup()
     curr_s = _closed_trade_setup()
     sid = setup_id(prev_s)
+    # Same confirmed_at_ts → same setup_id
+    assert setup_id(curr_s) == sid
     actions = IccStrategyAdapter.diff_setups({sid: prev_s}, {sid: curr_s}, "BTC")
     closes = [a for a in actions if isinstance(a, CloseAction)]
     assert len(closes) == 1
@@ -219,7 +300,6 @@ def test_diff_already_closed_no_duplicate_close():
 
 
 def test_diff_dead_pre_entry_no_close():
-    """Setup died pre-entry → not a trade, no Close."""
     s = _dead_pre_entry_setup()
     sid = setup_id(s)
     actions = IccStrategyAdapter.diff_setups({}, {sid: s}, "BTC")
@@ -227,7 +307,6 @@ def test_diff_dead_pre_entry_no_close():
 
 
 def test_diff_scanning_to_dead_no_action():
-    """SCANNING → COOLDOWN (no entry) → no action at all."""
     prev = _scanning_setup()
     curr = _dead_pre_entry_setup()
     sid = setup_id(prev)
@@ -235,7 +314,9 @@ def test_diff_scanning_to_dead_no_action():
     assert actions == []
 
 
-# ─── diff: TRAIL ──────────────────────────────────────────────────
+# ════════════════════════════════════════════════════════════════
+#  diff: TRAIL
+# ════════════════════════════════════════════════════════════════
 
 def test_diff_sl_unchanged_no_trail():
     s = _in_trade_setup()
@@ -265,7 +346,9 @@ def test_diff_no_trail_after_close():
     assert [a for a in actions if isinstance(a, TrailAction)] == []
 
 
-# ─── diff: PARTIAL ────────────────────────────────────────────────
+# ════════════════════════════════════════════════════════════════
+#  diff: PARTIAL
+# ════════════════════════════════════════════════════════════════
 
 def test_diff_partial_false_to_true_emits_partial():
     prev_s = _in_trade_setup()
@@ -291,27 +374,30 @@ def test_diff_partial_already_true_no_duplicate():
     assert [a for a in actions if isinstance(a, PartialAction)] == []
 
 
-# ─── diff: combined ───────────────────────────────────────────────
+# ════════════════════════════════════════════════════════════════
+#  diff: combined transitions
+# ════════════════════════════════════════════════════════════════
 
 def test_diff_complex_scenario():
     """Multiple setups in different transitions emit the right actions."""
-    # A: IN_TRADE → CLOSED
-    prev_a = _in_trade_setup(h4_bar=100)
-    curr_a = _closed_trade_setup(h4_bar=100)
+    ts_a = pd.Timestamp("2026-05-12T08:00:00")
+    ts_b = pd.Timestamp("2026-05-12T16:00:00")
+    ts_c = pd.Timestamp("2026-05-13T00:00:00")
+    ts_d = pd.Timestamp("2026-05-13T08:00:00")
+
+    prev_a = _in_trade_setup(h4_bar=100, confirmed_at_ts=ts_a)
+    curr_a = _closed_trade_setup(h4_bar=100, confirmed_at_ts=ts_a)
     sid_a = setup_id(prev_a)
 
-    # B: New IN_TRADE (Open)
-    curr_b = _in_trade_setup(h4_bar=200)
+    curr_b = _in_trade_setup(h4_bar=200, confirmed_at_ts=ts_b)
     sid_b = setup_id(curr_b)
 
-    # C: SL moved (Trail)
-    prev_c = _in_trade_setup(h4_bar=300, sl=80500.0)
-    curr_c = _in_trade_setup(h4_bar=300, sl=80500.0)
+    prev_c = _in_trade_setup(h4_bar=300, sl=80500.0, confirmed_at_ts=ts_c)
+    curr_c = _in_trade_setup(h4_bar=300, sl=80500.0, confirmed_at_ts=ts_c)
     curr_c.sl_current = 81500.0
     sid_c = setup_id(prev_c)
 
-    # D: Dead pre-entry → ignored
-    curr_d = _dead_pre_entry_setup(h4_bar=400)
+    curr_d = _dead_pre_entry_setup(h4_bar=400, confirmed_at_ts=ts_d)
     sid_d = setup_id(curr_d)
 
     prev = {sid_a: prev_a, sid_c: prev_c}
@@ -325,10 +411,12 @@ def test_diff_complex_scenario():
     assert len(opens) == 1
     assert len(closes) == 1
     assert len(trails) == 1
-    assert all(a.setup_id != sid_d for a in actions)  # D ignored
+    assert all(a.setup_id != sid_d for a in actions)
 
 
-# ─── Caching ──────────────────────────────────────────────────────
+# ════════════════════════════════════════════════════════════════
+#  Adapter caching
+# ════════════════════════════════════════════════════════════════
 
 def test_adapter_uses_internal_cache_across_calls(monkeypatch):
     adapter = IccStrategyAdapter()
@@ -371,7 +459,9 @@ def test_adapter_explicit_prev_setups_overrides_cache(monkeypatch):
     assert [a for a in actions if isinstance(a, OpenAction)] == []
 
 
-# ─── Session 5 defaults regression ────────────────────────────────
+# ════════════════════════════════════════════════════════════════
+#  Session 5 defaults regression
+# ════════════════════════════════════════════════════════════════
 
 def test_adapter_defaults_match_session5(monkeypatch):
     adapter = IccStrategyAdapter()

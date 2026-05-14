@@ -92,22 +92,48 @@ class CycleResult:
 def _setup_id_to_position_id(sid: SetupId) -> str:
     """Convert a strategy SetupId tuple to a stable string position_id.
 
-    Format: "{asset}_{h4_bar}_{direction}"
-    Example: ("BTC", 100, "BUY") → "BTC_100_BUY"
+    Format: "{asset}__{ts_sanitized}__{direction}"
+    where ts_sanitized = confirmed_at_ts ISO with ":" replaced by "-"
+    (because ":" can cause issues in file paths and DB queries on some
+    platforms).
 
-    This is the position_id used in state_manager. It's stable (same input
-    → same output) and unique (no two setups can collide by ICC design).
+    Example: ("BTC", "2026-05-12T14:00:00", "BUY") → "BTC__2026-05-12T14-00-00__BUY"
+
+    Bug #3 fix (Session 6b dry run E2E):
+    Previously used bar_index (int) → INSTABLE across cycles.
+    Now uses confirmed_at_ts → stable, anchored to a real moment in time.
     """
-    asset, h4_bar, direction = sid
-    return f"{asset}_{h4_bar}_{direction}"
+    asset, ts_iso, direction = sid
+    ts_sanitized = ts_iso.replace(":", "-")
+    return f"{asset}__{ts_sanitized}__{direction}"
 
 
 def _position_id_to_setup_id(pid: str) -> SetupId:
-    """Inverse of _setup_id_to_position_id. For lookups."""
-    parts = pid.split("_")
+    """Inverse of _setup_id_to_position_id. For lookups.
+
+    Splits on "__" (double underscore) to preserve timestamp formatting
+    and reconstructs the original ":" in the timestamp portion.
+    """
+    parts = pid.split("__")
     if len(parts) != 3:
         raise ValueError(f"Invalid position_id format: {pid}")
-    return (parts[0], int(parts[1]), parts[2])
+    asset, ts_sanitized, direction = parts
+    # Reconstruct ISO timestamp: T14-00-00 → T14:00:00 (only after the 'T')
+    ts_iso = _unsanitize_ts(ts_sanitized)
+    return (asset, ts_iso, direction)
+
+
+def _unsanitize_ts(ts_sanitized: str) -> str:
+    """Reverse the ':' → '-' replacement done in _setup_id_to_position_id.
+
+    Only after the 'T' (in case the date contains '-' that we must preserve).
+    Example: "2026-05-12T14-00-00" → "2026-05-12T14:00:00"
+    """
+    if "T" not in ts_sanitized:
+        return ts_sanitized  # defensive: shouldn't happen but no crash
+    date_part, time_part = ts_sanitized.split("T", 1)
+    time_part = time_part.replace("-", ":")
+    return f"{date_part}T{time_part}"
 
 
 # ════════════════════════════════════════════════════════════════
@@ -300,32 +326,62 @@ class PaperTrader:
 
         actions, _ = self.adapter.get_actions_for_cycle(asset, daily, h4, h1)
 
-        # Process actions in order: TRAILs first (no money), then CLOSE, then PARTIAL, then OPEN
-        # Why this order:
-        # - Trail updates DB only (free).
-        # - Close frees up capital → OPEN can then use that capital.
-        # - Partial doesn't free much capital but records the 85% lock-in.
-        # - Open commits capital LAST so closes happen first.
+        # Process actions in order, with special handling for setups that
+        # have BOTH an Open and a Close in the same cycle (this happens when
+        # ICC sees a setup's full lifecycle within the visible window).
+        #
+        # Standard order: TRAIL → CLOSE → PARTIAL → OPEN
+        # Why: closes free up capital before opens try to use it.
+        #
+        # EXCEPTION (Bug fix from dry run, Session 7):
+        # For setups that have BOTH Open and Close emitted in the same cycle,
+        # we must process Open FIRST, then Close on that same setup.
+        # Otherwise, _exec_close skips with "unknown position" warning because
+        # the position hasn't been recorded in state_manager yet.
         trails = [a for a in actions if isinstance(a, TrailAction)]
         closes = [a for a in actions if isinstance(a, CloseAction)]
         partials = [a for a in actions if isinstance(a, PartialAction)]
         opens = [a for a in actions if isinstance(a, OpenAction)]
 
+        # Step 1: All Trails (free, just update SL in DB)
         for a in trails:
-            self._exec_trail(a, timestamp_iso)
-            result.n_trails += 1
+            if self._exec_trail(a, timestamp_iso):
+                result.n_trails += 1
 
+        # Step 2: Identify setups with BOTH open AND close in this cycle
+        sids_with_open = {a.setup_id for a in opens}
+        sids_with_close = {a.setup_id for a in closes}
+        sids_open_and_close = sids_with_open & sids_with_close
+
+        # Step 2a: Pair-process those setups (Open first, then Close)
+        for sid in sids_open_and_close:
+            open_a = next(a for a in opens if a.setup_id == sid)
+            close_a = next(a for a in closes if a.setup_id == sid)
+            if self._exec_open(open_a, timestamp_iso):
+                result.n_trades_opened += 1
+                if self._exec_close(close_a, timestamp_iso):
+                    result.n_trades_closed += 1
+            else:
+                result.n_trades_skipped += 1
+
+        # Step 3: Closes for setups WITHOUT a paired Open (real closes of
+        # positions already in DB) — frees up capital for subsequent opens
         for a in closes:
-            self._exec_close(a, timestamp_iso)
-            result.n_trades_closed += 1
+            if a.setup_id in sids_open_and_close:
+                continue  # already handled above
+            if self._exec_close(a, timestamp_iso):
+                result.n_trades_closed += 1
 
+        # Step 4: Partials (mark 90% taken on existing positions)
         for a in partials:
-            self._exec_partial(a, timestamp_iso)
-            result.n_partials += 1
+            if self._exec_partial(a, timestamp_iso):
+                result.n_partials += 1
 
+        # Step 5: Opens for setups WITHOUT a paired Close (real new entries)
         for a in opens:
-            opened = self._exec_open(a, timestamp_iso)
-            if opened:
+            if a.setup_id in sids_open_and_close:
+                continue  # already handled above
+            if self._exec_open(a, timestamp_iso):
                 result.n_trades_opened += 1
             else:
                 result.n_trades_skipped += 1
@@ -376,16 +432,21 @@ class PaperTrader:
         )
         return True
 
-    def _exec_close(self, a: CloseAction, ts: str) -> None:
-        """Execute a CloseAction: simulate SELL, record, remove position."""
+    def _exec_close(self, a: CloseAction, ts: str) -> bool:
+        """Execute a CloseAction: simulate SELL, record, remove position.
+
+        Returns:
+            True if the close was executed, False if skipped (position unknown).
+            Bug #2 fix: caller can use this to increment counters accurately.
+        """
         position_id = _setup_id_to_position_id(a.setup_id)
         pos = self.sm.get_open_position(position_id)
         if pos is None:
-            # Position not in DB — possible if we missed the OPEN (e.g. opened+closed same cycle).
-            # In that case the strategy adapter emits BOTH Open and Close — Open is processed first
-            # in _process_asset order, so this branch is unusual. Log and skip.
+            # Position not in DB. Either:
+            # - We missed the OPEN (shouldn't happen after Bug 3 fix)
+            # - Adapter emitted close for a setup we never opened
             logger.warning("Close action for unknown position %s — skipping", position_id)
-            return
+            return False
 
         # Reconstruct the entry fill from persisted data
         entry_fill = SimulatedFill(
@@ -441,27 +502,36 @@ class PaperTrader:
             exit_reason=a.exit_reason, held_bars=0,
             ts=ts,
         )
+        return True
 
-    def _exec_trail(self, a: TrailAction, ts: str) -> None:
-        """Execute a TrailAction: just update SL in DB."""
+    def _exec_trail(self, a: TrailAction, ts: str) -> bool:
+        """Execute a TrailAction: just update SL in DB.
+
+        Returns True if the SL was updated, False if position unknown.
+        """
         position_id = _setup_id_to_position_id(a.setup_id)
         pos = self.sm.get_open_position(position_id)
         if pos is None:
             logger.warning("Trail action for unknown position %s — skipping", position_id)
-            return
+            return False
         self.sm.update_position_sl(
             position_id, new_sl=a.new_sl,
             timestamp=a.timestamp, sl_source=a.sl_source,
         )
+        return True
 
-    def _exec_partial(self, a: PartialAction, ts: str) -> None:
-        """Execute a PartialAction: mark the position as partial-taken."""
+    def _exec_partial(self, a: PartialAction, ts: str) -> bool:
+        """Execute a PartialAction: mark the position as partial-taken.
+
+        Returns True if the position was marked, False if position unknown.
+        """
         position_id = _setup_id_to_position_id(a.setup_id)
         pos = self.sm.get_open_position(position_id)
         if pos is None:
             logger.warning("Partial action for unknown position %s — skipping", position_id)
-            return
+            return False
         self.sm.mark_partial_taken(position_id)
+        return True
 
     # ─── Equity snapshot ──────────────────────────────────────────
 

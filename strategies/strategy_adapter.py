@@ -58,21 +58,41 @@ logger = logging.getLogger(__name__)
 # ════════════════════════════════════════════════════════════════
 
 # We use a tuple as setup identity:
-# (asset, h4_indication_bar_index, direction_value)
-SetupId = tuple[str, int, str]
+# (asset, h4_indication.confirmed_at_ts (ISO string), direction_value)
+#
+# WHY NOT bar_index ANYMORE (Bug #3 fix from Session 6b dry run E2E):
+# - bar_index is an "absolute index in input DataFrame" (commented in
+#   strategies/icc_structure.py line 63)
+# - When the H1 window slides 1 bar between cycles, the position of the
+#   same real structure shifts (e.g. from 152 to 151)
+# - This made setup_id INSTABLE across cycles, causing the adapter to
+#   emit duplicate Opens (and Closes targeting non-existent positions)
+# - confirmed_at_ts is a pd.Timestamp anchored to a real moment in time,
+#   independent of DataFrame indexing → stable across cycles by design
+SetupId = tuple[str, str, str]
 
 
 def setup_id(setup: TradeSetup) -> SetupId:
     """Compute a stable identity for a TradeSetup.
 
-    The (asset, h4_indication.bar_index, direction) tuple is:
+    The (asset, h4_indication.confirmed_at_ts ISO, direction) tuple is:
     - Unique : ICC only creates one setup per (h4 break, direction) by design
-    - Stable : recomputed from objective H4 structure on every call
+    - Stable : confirmed_at_ts is a pd.Timestamp = absolute moment in time
+               that does NOT change when the H1 window slides between cycles
     - Reproducible : run_icc_cycle twice on same data → same setup_ids
+
+    The timestamp is serialized to ISO format (e.g. "2026-05-12T14:00:00")
+    so the identifier is plain string-compatible and easy to log/persist.
     """
+    ts = setup.h4_indication.confirmed_at_ts
+    # Normalize to UTC then strip tz for canonical form
+    pts = pd.Timestamp(ts)
+    if pts.tz is not None:
+        pts = pts.tz_convert("UTC").tz_localize(None)
+    ts_iso = pts.isoformat()  # e.g. "2026-05-12T14:00:00"
     return (
         setup.asset,
-        setup.h4_indication.bar_index,
+        ts_iso,
         setup.direction.value,
     )
 

@@ -108,9 +108,9 @@ def _make_trader(
 # ════════════════════════════════════════════════════════════════
 
 def test_setup_id_to_position_id_roundtrip():
-    sid = ("BTC", 123, "BUY")
+    sid = ("BTC", "2026-05-12T14:00:00", "BUY")
     pid = _setup_id_to_position_id(sid)
-    assert pid == "BTC_123_BUY"
+    assert pid == "BTC__2026-05-12T14-00-00__BUY"
     sid_back = _position_id_to_setup_id(pid)
     assert sid_back == sid
 
@@ -168,7 +168,7 @@ def test_cycle_when_bot_halted_returns_early(tmp_path):
 
 def test_open_action_creates_position(tmp_path):
     open_a = OpenAction(
-        setup_id=("BTC", 10, "BUY"),
+        setup_id=("BTC", "2026-05-12T14:00:00", "BUY"),
         asset="BTC", direction="BUY",
         entry_timestamp="2026-05-14T18:00:00Z",
         entry_price=80000.0,
@@ -190,7 +190,7 @@ def test_open_action_creates_position(tmp_path):
 def test_open_action_skipped_if_insufficient_capital(tmp_path):
     """If free capital is too low, action is skipped (logged, not crashed)."""
     open_a = OpenAction(
-        setup_id=("BTC", 10, "BUY"),
+        setup_id=("BTC", "2026-05-12T14:00:00", "BUY"),
         asset="BTC", direction="BUY",
         entry_timestamp="2026-05-14T18:00:00Z",
         entry_price=80000.0, sl_price=78000.0, tp_price=84000.0,
@@ -221,7 +221,7 @@ def test_close_action_closes_existing_position(tmp_path):
     """Open a position, then close it via CloseAction."""
     # Cycle 1: open
     open_a = OpenAction(
-        setup_id=("BTC", 10, "BUY"), asset="BTC", direction="BUY",
+        setup_id=("BTC", "2026-05-12T14:00:00", "BUY"), asset="BTC", direction="BUY",
         entry_timestamp="2026-05-14T18:00:00Z",
         entry_price=80000.0, sl_price=78000.0, tp_price=84000.0,
         sl_source=None, tp_source=None,
@@ -240,7 +240,7 @@ def test_close_action_closes_existing_position(tmp_path):
 
     # Cycle 2: close the same setup_id — use side_effect to scope per asset
     close_a = CloseAction(
-        setup_id=("BTC", 10, "BUY"), asset="BTC",
+        setup_id=("BTC", "2026-05-12T14:00:00", "BUY"), asset="BTC",
         exit_timestamp="2026-05-14T22:00:00Z",
         exit_price=84000.0, exit_reason="TP_HIT",
     )
@@ -262,7 +262,7 @@ def test_close_action_closes_existing_position(tmp_path):
 def test_close_action_unknown_position_skipped(tmp_path):
     """Close action targeting unknown position is logged and skipped, no crash."""
     close_a = CloseAction(
-        setup_id=("BTC", 999, "BUY"), asset="BTC",
+        setup_id=("BTC", "9999-12-31T00:00:00", "BUY"), asset="BTC",
         exit_timestamp="2026-05-14T22:00:00Z",
         exit_price=84000.0, exit_reason="TP_HIT",
     )
@@ -276,8 +276,64 @@ def test_close_action_unknown_position_skipped(tmp_path):
             peak_equity=1000.0, drawdown_pct=0.0,
         ))
     result = trader.run_one_cycle(timestamp_iso="2026-05-14T18:00:00Z")
-    # Cycle succeeds (no crash), just no close happened
+    # Cycle succeeds (no crash), no close happened
     assert result.success is True
+    # Bug #2 fix: n_trades_closed must NOT be incremented when close skipped
+    assert result.n_trades_closed == 0
+
+
+def test_open_and_close_same_cycle_processed_in_order(tmp_path):
+    """When the adapter emits BOTH Open and Close for the same setup_id in
+    one cycle (opened_and_closed_same_cycle scenario), the Open MUST be
+    executed BEFORE the Close.
+
+    Regression for the issue found in Session 7 dry run after Bug 3 v1 fix:
+    3 closes were skipping with 'unknown position' warning because the
+    matching opens hadn't yet been executed (Closes ran before Opens in
+    the original sequential order).
+    """
+    sid = ("BTC", "2026-05-12T14:00:00", "BUY")
+    open_a = OpenAction(
+        setup_id=sid, asset="BTC", direction="BUY",
+        entry_timestamp="2026-05-14T18:00:00Z",
+        entry_price=80000.0, sl_price=78000.0, tp_price=84000.0,
+        sl_source=None, tp_source=None,
+    )
+    close_a = CloseAction(
+        setup_id=sid, asset="BTC",
+        exit_timestamp="2026-05-14T22:00:00Z",
+        exit_price=84000.0, exit_reason="TP_HIT",
+    )
+
+    # Adapter returns BOTH actions for BTC in the same cycle
+    def side_effect(asset, daily_df, h4_df, h1_df, prev_setups=None):
+        if asset == "BTC":
+            return ([open_a, close_a], {})
+        return ([], {})
+
+    trader = _make_trader(tmp_path, adapter_actions=[])
+    trader.adapter.get_actions_for_cycle.side_effect = side_effect
+
+    # Setup baseline equity to avoid HALT
+    from paper_trading.state_manager import EquitySnapshot
+    with trader.sm.cycle():
+        trader.sm.record_equity_snapshot(EquitySnapshot(
+            timestamp="2026-05-14T17:00:00Z",
+            cash=1000.0, open_positions_value=0.0, equity=1000.0,
+            peak_equity=1000.0, drawdown_pct=0.0,
+        ))
+
+    result = trader.run_one_cycle(timestamp_iso="2026-05-14T18:00:00Z")
+
+    # Both actions must succeed
+    assert result.success is True
+    assert result.n_trades_opened == 1, "Open must be executed"
+    assert result.n_trades_closed == 1, (
+        "Close must be executed AFTER the open (Bug fix regression)"
+    )
+    # Position is open then closed → 0 still open, 1 closed trade
+    assert len(trader.sm.get_open_positions()) == 0
+    assert len(trader.sm.get_closed_trades()) == 1
 
 
 # ════════════════════════════════════════════════════════════════
@@ -287,7 +343,7 @@ def test_close_action_unknown_position_skipped(tmp_path):
 def test_trail_updates_sl(tmp_path):
     # First: open a position
     open_a = OpenAction(
-        setup_id=("BTC", 10, "BUY"), asset="BTC", direction="BUY",
+        setup_id=("BTC", "2026-05-12T14:00:00", "BUY"), asset="BTC", direction="BUY",
         entry_timestamp="2026-05-14T18:00:00Z",
         entry_price=80000.0, sl_price=78000.0, tp_price=84000.0,
         sl_source=None, tp_source=None,
@@ -304,7 +360,7 @@ def test_trail_updates_sl(tmp_path):
 
     # Then: trail action — scoped to BTC only via side_effect
     trail_a = TrailAction(
-        setup_id=("BTC", 10, "BUY"), asset="BTC",
+        setup_id=("BTC", "2026-05-12T14:00:00", "BUY"), asset="BTC",
         new_sl=79500.0, timestamp="2026-05-14T19:00:00Z",
         sl_source="trailed",
     )
@@ -316,7 +372,7 @@ def test_trail_updates_sl(tmp_path):
     result = trader.run_one_cycle(timestamp_iso="2026-05-14T19:00:00Z")
     assert result.n_trails == 1
     # SL was updated
-    pos = trader.sm.get_open_position("BTC_10_BUY")
+    pos = trader.sm.get_open_position("BTC__2026-05-12T14-00-00__BUY")
     assert pos.sl_price == 79500.0
 
 
@@ -326,7 +382,7 @@ def test_trail_updates_sl(tmp_path):
 
 def test_partial_marks_position(tmp_path):
     open_a = OpenAction(
-        setup_id=("BTC", 10, "BUY"), asset="BTC", direction="BUY",
+        setup_id=("BTC", "2026-05-12T14:00:00", "BUY"), asset="BTC", direction="BUY",
         entry_timestamp="2026-05-14T18:00:00Z",
         entry_price=80000.0, sl_price=78000.0, tp_price=84000.0,
         sl_source=None, tp_source=None,
@@ -342,7 +398,7 @@ def test_partial_marks_position(tmp_path):
     trader.run_one_cycle(timestamp_iso="2026-05-14T18:00:00Z")
 
     partial_a = PartialAction(
-        setup_id=("BTC", 10, "BUY"), asset="BTC",
+        setup_id=("BTC", "2026-05-12T14:00:00", "BUY"), asset="BTC",
         partial_price=82000.0, partial_timestamp="2026-05-14T20:00:00Z",
         partial_pnl_pct=0.025,
     )
@@ -353,7 +409,7 @@ def test_partial_marks_position(tmp_path):
     trader.adapter.get_actions_for_cycle.side_effect = partial_side_effect
     result = trader.run_one_cycle(timestamp_iso="2026-05-14T20:00:00Z")
     assert result.n_partials == 1
-    pos = trader.sm.get_open_position("BTC_10_BUY")
+    pos = trader.sm.get_open_position("BTC__2026-05-12T14-00-00__BUY")
     assert pos.partial_taken is True
 
 
@@ -374,7 +430,7 @@ def test_cycle_triggers_halt_on_dd(tmp_path):
         ))
         # Open a BTC position whose mark-to-market won't save the DD
         trader.sm.open_position(OpenPosition(
-            position_id="BTC_5_BUY", asset="BTC", direction="BUY",
+            position_id="BTC__2026-05-10T00-00-00__BUY", asset="BTC", direction="BUY",
             entry_timestamp="2026-05-14T16:00:00Z",
             entry_price=80000.0, entry_fill_price=80080.0,
             units=0.001, initial_capital_used=100.0,
