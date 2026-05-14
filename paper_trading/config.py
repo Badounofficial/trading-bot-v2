@@ -131,10 +131,18 @@ MAX_DAILY_LOSS_PCT = 0.10  # 10%
 #                    DATA SOURCE (Decision 6 — Kraken)
 # ════════════════════════════════════════════════════════════════
 
-# Number of H1 bars to keep in rolling buffer (enough context for ICC)
-# ICC daily structure needs ~30 days = 30*24 = 720 H1 bars minimum
-# Take double for safety: 1500 H1 bars (~2 months)
-ROLLING_BUFFER_SIZE = 1500
+# Number of H1 bars to keep in rolling buffer (enough context for ICC).
+# ICC daily structure needs ~30 days = 30*24 = 720 H1 bars.
+#
+# IMPORTANT — DO NOT raise this above 1000 without a redesign:
+# Kraken's OHLCV API rejects fetch requests with limit > 1000 (validated
+# by data_source.py guard). Previously this was set to 1500 "for safety
+# margin" but Test B Live revealed all fetches failed with:
+#   "limit doit etre entre 1 et 1000, recu 1500"
+#
+# 720 was validated end-to-end by scripts/dry_run_48h.py (48 cycles on
+# real Kraken historical data, ICC computed correctly).
+ROLLING_BUFFER_SIZE = 720
 
 
 # ════════════════════════════════════════════════════════════════
