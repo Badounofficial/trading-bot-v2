@@ -56,6 +56,7 @@ from paper_trading import config
 from paper_trading.paper_trader import PaperTrader
 from paper_trading.state_manager import StateManager
 from paper_trading.monitoring import Monitor, JsonLineLogger, TelegramAlerter
+from paper_trading.backup import BackupManager
 
 
 # ════════════════════════════════════════════════════════════════
@@ -82,25 +83,43 @@ def main():
     workdir = Path(tempfile.mkdtemp(prefix="live_test_"))
     db_path = workdir / "state.db"
     logs_dir = workdir / "logs"
+    backup_dir = workdir / "backups"
     logs_dir.mkdir()
+    backup_dir.mkdir()
     print(f"\nTemp workspace: {workdir}")
-    print(f"  DB:   {db_path}")
-    print(f"  Logs: {logs_dir}")
+    print(f"  DB:      {db_path}")
+    print(f"  Logs:    {logs_dir}")
+    print(f"  Backups: {backup_dir}")
 
-    # ── 2. Setup state manager, monitor, trader ──
+    # ── 2. Setup state manager, monitor, backup manager, trader ──
     sm = StateManager(db_path=db_path)
     json_logger = JsonLineLogger(logs_dir=logs_dir)
     alerter = TelegramAlerter()  # Real Telegram from .env
     monitor = Monitor(json_logger=json_logger, alerter=alerter)
+
+    # IMPORTANT: align BackupManager with the SAME temp DB used by StateManager.
+    # Without this, BackupManager defaults to config.STATE_DB_PATH which may
+    # not exist (it didn't during yesterday's test) → snapshots fail silently
+    # → no Telegram backup sent. Bug discovered May 15, 2026.
+    backup_manager = BackupManager(
+        db_path=db_path,
+        backup_dir=backup_dir,
+        telegram_enabled=True,  # Real Telegram active for end-to-end validation
+    )
 
     print(f"\nTelegram enabled: {alerter.enabled}")
     if not alerter.enabled:
         print("⚠ Telegram is DISABLED — check .env (TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID)")
         print("  Bot will still run, but you won't get phone notifications.")
 
-    trader = PaperTrader(state_manager=sm, monitor=monitor)
+    trader = PaperTrader(
+        state_manager=sm,
+        monitor=monitor,
+        backup_manager=backup_manager,
+    )
     # NB: trader.adapter = real IccStrategyAdapter
     # NB: trader.data_fetcher = real live Kraken fetch
+    # NB: trader.backup_manager = aligned with temp DB (fix May 15, 2026)
 
     # ── 3. Schedule info ──
     now = datetime.now(timezone.utc)
@@ -172,8 +191,16 @@ def main():
                   f"PnL {sign}${t.pnl_dollars:7.2f} ({sign}{t.pnl_pct*100:5.2f}%)")
 
     print(f"\nArtifacts:")
-    print(f"  DB:   {workdir}/state.db")
-    print(f"  Logs: {workdir}/logs/")
+    print(f"  DB:      {workdir}/state.db")
+    print(f"  Logs:    {workdir}/logs/")
+    print(f"  Backups: {workdir}/backups/")
+
+    # Show what was backed up
+    snapshots = sorted(backup_dir.glob("state_*.db.gz"))
+    print(f"\nBackup snapshots created: {len(snapshots)}")
+    for s in snapshots:
+        size_kb = s.stat().st_size / 1024
+        print(f"  {s.name} ({size_kb:.1f} KB)")
     print(f"  Inspect: cat {workdir}/logs/*.jsonl | head -20")
 
     print("\n" + "=" * 70)
