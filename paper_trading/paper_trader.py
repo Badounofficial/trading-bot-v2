@@ -337,14 +337,64 @@ class PaperTrader:
 
         Called after each successful cycle. Both operations are fail-soft:
         backup failures are logged but never break the trading bot.
+
+        VISIBILITY POLICY (May 15, 2026 update):
+        Every outcome is logged so the operator never has a "silent skip"
+        situation. Previously, Telegram skips for "hour not scheduled" or
+        "already sent recently" produced no log line at all. The fail-soft
+        policy was hiding legitimate decisions from observation.
+
+        Log levels:
+        - INFO  : expected/normal skips (hour not scheduled, already sent)
+        - WARNING: skips that indicate a config issue (telegram not configured,
+                   no snapshot available, snapshot creation failed)
         """
+        # ─── 1. Local snapshot ──────────────────────────────────
         try:
-            self.backup_manager.snapshot(timestamp_iso=timestamp_iso)
+            snap = self.backup_manager.snapshot(timestamp_iso=timestamp_iso)
+            if not snap.ok:
+                logger.warning(
+                    "Local snapshot failed: %s", snap.error,
+                )
+            # Success is already logged at INFO inside create_snapshot()
         except Exception:
             logger.exception("Local snapshot failed (non-fatal)")
 
+        # ─── 2. Telegram backup ────────────────────────────────
         try:
-            self.backup_manager.maybe_send_to_telegram(timestamp_iso=timestamp_iso)
+            tg = self.backup_manager.maybe_send_to_telegram(
+                timestamp_iso=timestamp_iso,
+            )
+            if tg.ok and not tg.skipped:
+                # Success is already logged at INFO inside maybe_send_to_telegram
+                pass
+            elif tg.skipped:
+                # Distinguish "normal/expected" skips from "config issue" skips
+                expected_reasons = (
+                    "hour_",                     # not a scheduled hour
+                    "already_sent_this_hour",    # dedup
+                )
+                is_expected = any(
+                    str(tg.skip_reason or "").startswith(p)
+                    for p in expected_reasons
+                )
+                if is_expected:
+                    logger.info(
+                        "Telegram backup skipped (expected): %s",
+                        tg.skip_reason,
+                    )
+                else:
+                    # Other skips = config issue (not_configured, disabled, etc.)
+                    logger.warning(
+                        "Telegram backup skipped (config issue?): %s",
+                        tg.skip_reason,
+                    )
+            else:
+                # Not ok and not skipped = real failure
+                logger.warning(
+                    "Telegram backup failed: %s (http=%s)",
+                    tg.error, tg.http_status,
+                )
         except Exception:
             logger.exception("Telegram backup failed (non-fatal)")
 

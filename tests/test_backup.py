@@ -270,8 +270,8 @@ def test_telegram_skip_wrong_hour(tmp_path, monkeypatch):
     assert "not_scheduled" in result.skip_reason
 
 
-def test_telegram_skip_recently_sent(tmp_path, monkeypatch):
-    """Dedup: if last backup < 1h ago, skip even on scheduled hour."""
+def test_telegram_skip_same_scheduled_hour_same_day(tmp_path, monkeypatch):
+    """Dedup: if we already sent for THIS scheduled hour TODAY, skip."""
     db = tmp_path / "state.db"
     _make_fake_db(db)
     backup_dir = tmp_path / "backups"
@@ -288,13 +288,120 @@ def test_telegram_skip_recently_sent(tmp_path, monkeypatch):
         "paper_trading.config.LAST_TELEGRAM_BACKUP_FILE",
         tmp_path / ".last_telegram_backup",
     )
-    # Pre-mark a recent backup
+    # Pre-mark a backup at 12:00 UTC the same day
     _write_last_telegram_backup_ts("2026-05-14T12:00:00Z")
 
-    # 30 minutes later, scheduled hour but recent backup
+    # 30 minutes later — same scheduled hour, same day → skip
     result = bm.maybe_send_to_telegram("2026-05-14T12:30:00Z")
     assert result.skipped is True
-    assert "already_sent_recently" in result.skip_reason
+    assert "already_sent_this_hour_today" in result.skip_reason
+
+
+def test_telegram_does_not_skip_when_previous_backup_was_different_hour(
+    tmp_path, monkeypatch,
+):
+    """A manual backup at e.g. 11:02 must NOT block the scheduled 12:00 backup.
+
+    Regression test for the bug discovered May 15, 2026: the old "< 3600s"
+    dedup silently blocked the legitimate scheduled backup if a manual one
+    happened within the previous hour. The new logic only dedups when the
+    last backup was for the SAME scheduled hour on the same UTC day.
+    """
+    db = tmp_path / "state.db"
+    _make_fake_db(db)
+    backup_dir = tmp_path / "backups"
+    create_snapshot(db, backup_dir, timestamp_iso="2026-05-15T11:00:00Z")
+
+    bm = BackupManager(
+        db_path=db, backup_dir=backup_dir,
+        telegram_hours_utc=[0, 6, 12, 18],
+        telegram_enabled=True,
+    )
+    bm._telegram_token = "fake_token"
+    bm._telegram_chat_id = "fake_chat"
+    monkeypatch.setattr(
+        "paper_trading.config.LAST_TELEGRAM_BACKUP_FILE",
+        tmp_path / ".last_telegram_backup",
+    )
+    # Manual backup happened at 11:02 (NOT a scheduled hour, NOT the same as 12)
+    _write_last_telegram_backup_ts("2026-05-15T11:02:27.529604Z")
+
+    # Now bot reaches 12:00 UTC (scheduled hour 12, different from last 11)
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    with patch("paper_trading.backup.requests.post", return_value=mock_response):
+        result = bm.maybe_send_to_telegram("2026-05-15T12:00:00Z")
+
+    assert result.ok is True
+    assert result.skipped is False, (
+        "Scheduled 12:00 backup MUST NOT be blocked by an earlier "
+        "manual backup at 11:02 (different hour). Regression for "
+        "May 15, 2026 bug."
+    )
+
+
+def test_telegram_skips_when_already_sent_for_same_scheduled_hour_after_restart(
+    tmp_path, monkeypatch,
+):
+    """If the bot restarts at 12:30 UTC after sending at 12:00 UTC same day,
+    it should NOT re-send (dedup on same scheduled hour + same day).
+    """
+    db = tmp_path / "state.db"
+    _make_fake_db(db)
+    backup_dir = tmp_path / "backups"
+    create_snapshot(db, backup_dir, timestamp_iso="2026-05-15T11:55:00Z")
+
+    bm = BackupManager(
+        db_path=db, backup_dir=backup_dir,
+        telegram_hours_utc=[12],
+        telegram_enabled=True,
+    )
+    bm._telegram_token = "fake_token"
+    bm._telegram_chat_id = "fake_chat"
+    monkeypatch.setattr(
+        "paper_trading.config.LAST_TELEGRAM_BACKUP_FILE",
+        tmp_path / ".last_telegram_backup",
+    )
+    # Marked as sent at 12:00 UTC same day
+    _write_last_telegram_backup_ts("2026-05-15T12:00:00Z")
+
+    # Bot restart and reaches 12:30 UTC (same hour 12, same day) → skip
+    result = bm.maybe_send_to_telegram("2026-05-15T12:30:00Z")
+    assert result.skipped is True
+    assert "already_sent_this_hour_today" in result.skip_reason
+
+
+def test_telegram_does_send_next_day_even_at_same_hour(tmp_path, monkeypatch):
+    """A backup sent at 12:00 UTC on day N must NOT block the 12:00 UTC
+    backup on day N+1.
+    """
+    db = tmp_path / "state.db"
+    _make_fake_db(db)
+    backup_dir = tmp_path / "backups"
+    create_snapshot(db, backup_dir, timestamp_iso="2026-05-15T11:55:00Z")
+
+    bm = BackupManager(
+        db_path=db, backup_dir=backup_dir,
+        telegram_hours_utc=[12],
+        telegram_enabled=True,
+    )
+    bm._telegram_token = "fake_token"
+    bm._telegram_chat_id = "fake_chat"
+    monkeypatch.setattr(
+        "paper_trading.config.LAST_TELEGRAM_BACKUP_FILE",
+        tmp_path / ".last_telegram_backup",
+    )
+    # Marked as sent at 12:00 UTC YESTERDAY
+    _write_last_telegram_backup_ts("2026-05-14T12:00:00Z")
+
+    # Today at 12:00 UTC — same hour but different day → must send
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    with patch("paper_trading.backup.requests.post", return_value=mock_response):
+        result = bm.maybe_send_to_telegram("2026-05-15T12:00:00Z")
+
+    assert result.ok is True
+    assert result.skipped is False
 
 
 def test_telegram_no_snapshots_available(tmp_path, monkeypatch):

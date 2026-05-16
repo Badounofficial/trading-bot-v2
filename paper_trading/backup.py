@@ -349,17 +349,28 @@ class BackupManager:
                 skip_reason=f"hour_{current_hour}_not_scheduled",
             )
 
-        # Deduplication: did we already send at this hour today?
+        # Deduplication: did we already send for THIS scheduled hour TODAY?
+        #
+        # Previous logic (< 3600s elapsed) had a flaw: a manual test backup
+        # at e.g. 11:02 UTC would silently block the legitimate 12:00 UTC
+        # scheduled backup, with NO log to explain why.
+        #
+        # New logic: skip ONLY if the last backup was for the same scheduled
+        # hour on the same UTC day. This means:
+        # - Manual tests at non-scheduled hours never block scheduled backups
+        # - Restarts during the same scheduled hour are still dedup'd
+        # - Each scheduled hour [0, 6, 12, 18] gets its own slot per day
         if not force:
             last_ts = _read_last_telegram_backup_ts()
             if last_ts:
                 try:
                     last_dt = datetime.fromisoformat(last_ts.replace("Z", "+00:00"))
-                    # If last backup was less than 1 hour ago in same hour slot, skip
-                    if (now - last_dt).total_seconds() < 3600:
+                    same_day = last_dt.date() == now.date()
+                    same_hour = last_dt.hour == current_hour
+                    if same_day and same_hour:
                         return TelegramBackupResult(
                             ok=True, skipped=True,
-                            skip_reason="already_sent_recently",
+                            skip_reason=f"already_sent_this_hour_today_{current_hour}",
                         )
                 except Exception:
                     pass  # corrupted timestamp, proceed with send
