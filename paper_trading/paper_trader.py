@@ -709,21 +709,36 @@ class PaperTrader:
     # ─── Heartbeat / weekly recap ─────────────────────────────────
 
     def _maybe_send_heartbeat(self, timestamp_iso: str) -> None:
-        """Send daily heartbeat if it's HEARTBEAT_HOUR_UTC."""
+        """Send enriched daily summary at HEARTBEAT_HOUR_UTC.
+
+        Replaces the basic heartbeat with the full daily_summary report
+        (includes drawdown, peak, today range, 24h window, backups).
+
+        Fail-soft: any exception is logged but never breaks the cycle.
+        """
         dt = pd.Timestamp(timestamp_iso)
         if dt.hour != config.HEARTBEAT_HOUR_UTC:
             return
-        # Compute today's stats
-        latest = self.sm.get_latest_equity_snapshot()
-        equity = latest.equity if latest else config.INITIAL_CAPITAL
-        n_open = len(self.sm.get_open_positions())
-        today_trades = self._trades_today(dt)
-        pnl_today = sum(t.pnl_dollars for t in today_trades)
-        self.monitor.send_heartbeat(
-            equity=equity, n_open_positions=n_open,
-            pnl_today=pnl_today, n_trades_today=len(today_trades),
-            ts=timestamp_iso,
-        )
+        try:
+            # Lazy import to avoid circular dependency at module load
+            from scripts.daily_summary import send_daily_summary
+            # Convert pandas Timestamp to native datetime with UTC tz
+            if dt.tz is None:
+                now_dt = dt.to_pydatetime().replace(tzinfo=timezone.utc)
+            else:
+                now_dt = dt.to_pydatetime()
+            ok, err = send_daily_summary(
+                stdout=False,   # Don't pollute bot stdout
+                telegram=True,
+                now=now_dt,
+            )
+            if ok:
+                logger.info(f"Daily summary sent to Telegram at {timestamp_iso}")
+            else:
+                logger.warning(f"Daily summary send failed: {err}")
+        except Exception as e:
+            # Fail-soft: NEVER break the bot's cycle on summary failure
+            logger.warning(f"Daily summary exception (non-fatal): {e}")
 
     def _maybe_send_weekly_recap(self, timestamp_iso: str) -> None:
         """Send weekly recap if Sunday at WEEKLY_RECAP_HOUR."""

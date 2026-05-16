@@ -1,27 +1,31 @@
 """
-daily_summary.py — Send a daily summary of the trading bot to Telegram.
+daily_summary.py — Daily summary of the trading bot (stdout + Telegram).
+
+EXECUTABLE AND IMPORTABLE
+=========================
+Can be run as a CLI script:
+    python -m scripts.daily_summary              # stdout + Telegram
+    python -m scripts.daily_summary --no-stdout
+    python -m scripts.daily_summary --no-telegram
+
+OR imported and called from another module (e.g. paper_trader for auto-send):
+    from scripts.daily_summary import send_daily_summary
+    success = send_daily_summary(stdout=False, telegram=True)
 
 WHAT THIS DOES
 ==============
-Builds a human-readable summary of the bot's state, covering:
+Builds a human-readable summary of the bot's state:
 - Current state (status, equity, drawdown)
 - Today UTC (since 00:00 UTC of current day)
 - Last 24h (rolling window)
 - Snapshot counts and Telegram backup history
 
-Sends to stdout AND Telegram (configurable via flags).
 Read-only on state.db — safe to run anytime, even while bot is in cycle.
-
-USAGE
-=====
-    python -m scripts.daily_summary               # both stdout + Telegram
-    python -m scripts.daily_summary --no-telegram # stdout only
-    python -m scripts.daily_summary --no-stdout   # Telegram only
 
 DESIGNED FOR
 ============
 - Manual morning check during trip (via SSH iPhone)
-- Optional: integration into bot's run_one_cycle() to auto-send at HEARTBEAT_HOUR_UTC
+- Auto-integration into bot's cycle to send at HEARTBEAT_HOUR_UTC
 """
 from __future__ import annotations
 
@@ -32,10 +36,6 @@ import sys
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-)
 logger = logging.getLogger(__name__)
 
 from paper_trading import config
@@ -61,7 +61,10 @@ def _query_db(db_path: Path, now: datetime) -> dict:
         cur = conn.cursor()
 
         # Bot state
-        cur.execute("SELECT status, halt_reason, halt_timestamp, last_cycle_timestamp FROM bot_state LIMIT 1")
+        cur.execute(
+            "SELECT status, halt_reason, halt_timestamp, last_cycle_timestamp "
+            "FROM bot_state LIMIT 1"
+        )
         row = cur.fetchone()
         if row:
             out["bot_status"] = row[0]
@@ -129,7 +132,7 @@ def _query_db(db_path: Path, now: datetime) -> dict:
         )
         out["today_cycles"] = cur.fetchone()[0]
 
-        # Open positions
+        # Open positions (using real schema: units, not qty)
         cur.execute("SELECT COUNT(*), COALESCE(SUM(units * entry_price), 0) FROM open_positions")
         row = cur.fetchone()
         out["open_positions_count"] = row[0]
@@ -168,7 +171,7 @@ def _query_db(db_path: Path, now: datetime) -> dict:
 def _query_backups() -> dict:
     """Read local backup info."""
     backup_dir = config.BACKUPS_DIR
-    out = {}
+    out: dict = {}
     if backup_dir.exists():
         snapshots = sorted(backup_dir.glob("state_*.db.gz"))
         out["count"] = len(snapshots)
@@ -197,14 +200,6 @@ def _fmt_pct(x: float | None) -> str:
     if x is None:
         return "n/a"
     return f"{x:+.2%}"
-
-
-def _fmt_delta_money(a: float | None, b: float | None) -> str:
-    """Format the difference (a - b) as money with sign."""
-    if a is None or b is None:
-        return "n/a"
-    d = a - b
-    return f"{'+' if d >= 0 else ''}{d:,.2f}"
 
 
 def _fmt_age(dt: datetime | None, now: datetime) -> str:
@@ -263,7 +258,6 @@ def build_summary(db: dict, backups: dict, now: datetime) -> tuple[str, str]:
     else:
         status_icon = "⚪"
 
-    # Today emoji
     today_emoji = "📈" if (today_pnl or 0) >= 0 else "📉"
     h24_emoji = "📈" if (h24_pnl or 0) >= 0 else "📉"
 
@@ -273,7 +267,7 @@ def build_summary(db: dict, backups: dict, now: datetime) -> tuple[str, str]:
     lines.append(f"  TRADING BOT DAILY SUMMARY — {now.strftime('%Y-%m-%d %H:%M UTC')}")
     lines.append("=" * 72)
     lines.append("")
-    lines.append(f"── Current state ──")
+    lines.append("── Current state ──")
     lines.append(f"  Status              : {status_icon} {bot_status}")
     if db.get("halt_reason"):
         lines.append(f"  ⚠ HALT reason       : {db['halt_reason']}")
@@ -283,7 +277,7 @@ def build_summary(db: dict, backups: dict, now: datetime) -> tuple[str, str]:
     lines.append(f"  Peak equity         : {_fmt_money(peak_eq)}")
     lines.append(f"  Drawdown from peak  : {_fmt_pct(cur_dd)}")
     lines.append("")
-    lines.append(f"── Today (since 00:00 UTC) ──")
+    lines.append("── Today (since 00:00 UTC) ──")
     if today_start_eq is not None:
         lines.append(f"  Start equity        : {_fmt_money(today_start_eq)}")
     lines.append(f"  PnL today           : {today_emoji} {_fmt_money(today_pnl) if today_pnl is not None else 'n/a'} ({_fmt_pct(today_pnl_pct)})")
@@ -294,20 +288,20 @@ def build_summary(db: dict, backups: dict, now: datetime) -> tuple[str, str]:
     if db.get("today_closed_count") is not None:
         lines.append(f"  Trades closed today : {db['today_closed_count']} (PnL: {_fmt_money(db.get('today_closed_pnl'))})")
     lines.append("")
-    lines.append(f"── Last 24h (rolling) ──")
+    lines.append("── Last 24h (rolling) ──")
     if ago_24h_eq is not None:
         lines.append(f"  Equity 24h ago      : {_fmt_money(ago_24h_eq)}")
     lines.append(f"  PnL last 24h        : {h24_emoji} {_fmt_money(h24_pnl) if h24_pnl is not None else 'n/a'} ({_fmt_pct(h24_pnl_pct)})")
     if db.get("last24h_closed_count") is not None:
         lines.append(f"  Trades closed 24h   : {db['last24h_closed_count']} (PnL: {_fmt_money(db.get('last24h_closed_pnl'))})")
     lines.append("")
-    lines.append(f"── Positions & trades ──")
+    lines.append("── Positions & trades ──")
     lines.append(f"  Open positions      : {db.get('open_positions_count', 'n/a')}")
     if db.get("open_positions_notional"):
         lines.append(f"  Open notional       : {_fmt_money(db.get('open_positions_notional'))}")
     lines.append(f"  Total closed trades : {db.get('total_closed_trades', 'n/a')}")
     lines.append("")
-    lines.append(f"── Backups ──")
+    lines.append("── Backups ──")
     lines.append(f"  Local snapshots     : {backups.get('count', 'n/a')}")
     if backups.get("latest_mtime"):
         lines.append(f"  Latest local        : {backups['latest_name']} ({_fmt_age(backups['latest_mtime'], now)})")
@@ -326,13 +320,13 @@ def build_summary(db: dict, backups: dict, now: datetime) -> tuple[str, str]:
     tg.append(f"*Equity*: {_fmt_money(cur_eq)}")
     tg.append(f"*Peak*: {_fmt_money(peak_eq)}  ·  *DD*: {_fmt_pct(cur_dd)}")
     tg.append("")
-    tg.append(f"*Today UTC*")
+    tg.append("*Today UTC*")
     tg.append(f"  PnL: {today_emoji} {_fmt_money(today_pnl) if today_pnl is not None else 'n/a'} ({_fmt_pct(today_pnl_pct)})")
     tg.append(f"  Cycles: {db.get('today_cycles', 'n/a')}")
     if db.get("today_closed_count") is not None:
         tg.append(f"  Trades closed: {db['today_closed_count']}")
     tg.append("")
-    tg.append(f"*Last 24h*")
+    tg.append("*Last 24h*")
     tg.append(f"  PnL: {h24_emoji} {_fmt_money(h24_pnl) if h24_pnl is not None else 'n/a'} ({_fmt_pct(h24_pnl_pct)})")
     if db.get("last24h_closed_count") is not None:
         tg.append(f"  Trades closed: {db['last24h_closed_count']}")
@@ -371,7 +365,46 @@ def _send_telegram(text_md: str) -> tuple[bool, str | None]:
 
 
 # ─────────────────────────────────────────────────────────────────────
-#  Main
+#  Public API (importable from other modules)
+# ─────────────────────────────────────────────────────────────────────
+
+def send_daily_summary(
+    *,
+    stdout: bool = True,
+    telegram: bool = True,
+    now: datetime | None = None,
+) -> tuple[bool, str | None]:
+    """High-level entry point: compute + format + send the daily summary.
+
+    Args:
+        stdout:   If True, print the ASCII version to stdout.
+        telegram: If True, send the Markdown version to Telegram.
+        now:      Override the timestamp (mainly for testing). Defaults to UTC now.
+
+    Returns:
+        (success, error_message) — success is False if any selected output failed.
+    """
+    if now is None:
+        now = datetime.now(timezone.utc)
+
+    db = _query_db(config.STATE_DB_PATH, now)
+    backups = _query_backups()
+    text_plain, text_tg = build_summary(db, backups, now)
+
+    if stdout:
+        print(text_plain)
+
+    if telegram:
+        ok, err = _send_telegram(text_tg)
+        if not ok:
+            logger.warning(f"Daily summary Telegram send failed: {err}")
+            return False, err
+
+    return True, None
+
+
+# ─────────────────────────────────────────────────────────────────────
+#  CLI entry point
 # ─────────────────────────────────────────────────────────────────────
 
 def main() -> int:
@@ -380,21 +413,20 @@ def main() -> int:
     parser.add_argument("--no-telegram", action="store_true", help="Do not send to Telegram")
     args = parser.parse_args()
 
-    now = datetime.now(timezone.utc)
+    # Configure logging only when run as script (not when imported)
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    )
 
-    db = _query_db(config.STATE_DB_PATH, now)
-    backups = _query_backups()
-    text_plain, text_tg = build_summary(db, backups, now)
+    ok, err = send_daily_summary(
+        stdout=not args.no_stdout,
+        telegram=not args.no_telegram,
+    )
 
-    # Output stdout
-    if not args.no_stdout:
-        print(text_plain)
-
-    # Send Telegram
     if not args.no_telegram:
-        ok, err = _send_telegram(text_tg)
         if ok:
-            print(f"\n✅ Sent to Telegram successfully.")
+            print("\n✅ Sent to Telegram successfully.")
         else:
             print(f"\n⚠ Telegram send failed: {err}", file=sys.stderr)
             return 1
