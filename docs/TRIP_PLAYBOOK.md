@@ -403,23 +403,84 @@ Le bot reçoit Ctrl+C (signal SIGINT), affiche le message "State preserved", et 
 
 ## <a name="mac-config"></a>📌 Annexe — Configuration "Mac ne dort jamais"
 
-**À faire la veille du départ** (étape 2 du plan final) :
+### ✅ AVANT le voyage — empêcher Mac de dormir
+
+**Cette config a été appliquée le 16 mai 2026** (et reste active jusqu'à ce que tu la changes au retour).
+
+Réglages actifs en permanence pour 12 jours (10 j voyage + 2 j marge) :
 
 ```bash
-# Empêcher Mac de dormir, même capot fermé
-sudo pmset -a sleep 0
-sudo pmset -a disablesleep 1
+sudo pmset -a sleep 0          # système ne dort jamais
+sudo pmset -a displaysleep 0   # écran ne dort jamais
+sudo pmset -a disksleep 0      # disque ne dort jamais
+sudo pmset -c disablesleep 1   # capot fermé OK (sur secteur)
+```
 
-# Vérifier
+**Vérification** :
+```bash
 pmset -g
 ```
 
-**Aussi** : Préférences Système → Batterie → Adaptateur → "Empêcher la mise en veille automatique quand l'écran est éteint" → ✅
-
-**Lance caffeinate au démarrage du bot** (en parallèle) :
-```bash
-caffeinate -i -t 864000  # 10 jours en secondes
+Tu dois voir :
 ```
+SleepDisabled   1
+sleep           0
+displaysleep    0
+disksleep       0
+```
+
+### 🔋 Pendant le voyage — règles strictes
+
+- ✅ Mac branché secteur 24/7
+- ✅ Capot peut être ouvert OU fermé (avec `SleepDisabled=1` ça marche dans les 2 cas)
+- ✅ Wi-Fi connecté (Tailscale a besoin d'internet)
+- ❌ Ne PAS débrancher le Mac du secteur
+- ❌ Ne PAS lancer une mise à jour macOS (peut redémarrer)
+- ❌ Ne PAS éteindre le Mac
+
+### 🏠 AU RETOUR — restaurer la veille normale
+
+**Une fois rentré du voyage**, lance ces 4 commandes pour réactiver la veille normale :
+
+```bash
+# Restaurer comportement par défaut (économie d'énergie)
+sudo pmset -a sleep 10          # dort après 10 min inactif
+sudo pmset -a displaysleep 10   # écran dort après 10 min
+sudo pmset -a disksleep 10      # disque dort après 10 min
+sudo pmset -c disablesleep 0    # capot fermé = veille (normal)
+```
+
+**Vérification** :
+```bash
+pmset -g
+```
+
+Doit afficher :
+```
+SleepDisabled   0
+sleep           10
+displaysleep    10
+disksleep       10
+```
+
+### 💡 Pourquoi c'est important de restaurer
+
+- **Énergie** : Mac qui ne dort jamais consomme 5-10× plus
+- **Usure** : SSD et batterie souffrent d'un usage 24/7
+- **Sécurité** : Mac toujours actif = plus vulnérable
+- **Économie d'écran** : OLED/écran qui ne dort jamais peut développer un burn-in
+
+→ La config "voyage" est **explicitement temporaire**.
+
+### ⚙️ Lance caffeinate au démarrage du bot (optionnel)
+
+Si tu veux double-sécurité en parallèle de pmset :
+
+```bash
+caffeinate -i -t 1036800 &  # 12 jours en secondes
+```
+
+**Note** : `pmset` (config système) est plus robuste que `caffeinate` (process utilisateur). Si `pmset` est bien configuré, `caffeinate` est superflu. Mais ça ne coûte rien de doubler.
 
 ---
 
@@ -457,5 +518,6 @@ Bonne route, Badoun. Le bot t'attend au retour. 🛟✨
 
 ---
 
-*Document créé le 16 mai 2026 — Version 1.0*
+*Document créé le 16 mai 2026 — Version 1.1*
+*v1.1 : ajout de la section "AU RETOUR — restaurer la veille normale" + détails de la config "no sleep" déjà appliquée le 16 mai*
 *Mis à jour : voir git log de docs/TRIP_PLAYBOOK.md*
