@@ -340,4 +340,196 @@ Détails complets : `docs/RECAPS/SESSION_5_RESULTS.md`, `SESSION_5_RECAP.md`, `A
 
 ---
 
-*Dernière mise à jour : 11 Mai 2026 — Fin Session 3*
+
+## Session 4 — Cycle ICC Complet (12 mai 2026)
+
+Implémentation du cycle ICC complet : HTF (Daily/H4) + Engagement (H1) + structures + order blocks + stops/trailing.
+
+- 18/18 tests verts (`test_icc_cycle.py`)
+- Backtest 2 ans BTC/ETH/SOL : **+62% moyen**
+- Voir `docs/RECAPS/SESSION_4_RECAP.md` pour détails
+
+**Verdict** : ICC fonctionne en simulation directionnelle.
+
+---
+
+## Session 5 — Walk-Forward 8 actifs × 12 ans (13 mai 2026)
+
+Validation extensive : walk-forward out-of-sample sur 8 cryptos × 12 ans (BTC, ETH, SOL, ADA, LINK, DOT, AVAX, LTC).
+
+- **PF moyen : 3.22** (profit factor)
+- Stratégie figée à ce stade : `strategies/icc_cycle.py` et `strategies/icc_structure.py` sont **FROZEN** depuis cette session
+- Décision : passer à du paper trading live sur Kraken
+- Voir `docs/RECAPS/SESSION_5_RECAP.md` et `docs/RECAPS/SESSION_5_RESULTS.md`
+
+**Verdict** : ICC validé sur 12 ans / 8 actifs. Prêt pour live.
+
+---
+
+## Session 6a + 6b — Sprint Paper Trading (13-14 mai 2026)
+
+Construction complète du moteur de paper trading orienté production.
+
+### Session 6a — 5 blocs (13 mai)
+- `data_source.py` : fetch live Kraken via ccxt
+- `order_simulator.py` : simulation des ordres MARKET avec slippage
+- `state_manager.py` : SQLite WAL persistant (positions, trades, snapshots, halt state)
+- `stop_manager.py` : SL/TP/trailing dynamic
+- `monitoring.py` : alertes Telegram (heartbeat, halt, errors)
+- 211 tests verts
+
+### Session 6b — Intégration (14 mai)
+- `data_prep.py` : multi-TF aggregation (H1 → H4 + Daily)
+- `strategies/strategy_adapter.py` : adaptateur ICC ↔ paper trader
+- `paper_trading/paper_trader.py` : orchestrateur (run_one_cycle + run_forever)
+- `scripts/dry_run_48h.py` : validation 48 cycles sur data historique
+- 314 tests verts (211 + 103)
+
+### Décisions clés Session 6
+- ICC est **frozen Session 5** — strategy_adapter consomme `strategies/icc_cycle.run_cycle()` sans modifier
+- `config.STATE_DB_PATH = paper_trading/state.db` (persistance crash-safe via WAL)
+- `ROLLING_BUFFER_SIZE = 720` H1 bars (30 jours, validé empiriquement)
+- Heartbeat à 12:00 UTC quotidien, alertes HALT immédiate
+
+**Verdict** : moteur paper trading prêt mais dry run a révélé 3 bugs critiques.
+
+---
+
+## Session 7 — Bugs critiques découverts au dry run E2E (14 mai 2026)
+
+Le premier dry run E2E sur data réelle Kraken a révélé 3 bugs.
+
+### Bug 1 — Cash tracking inexistant
+- `_record_equity_snapshot` laissait `cash` figé à INITIAL_CAPITAL
+- Résultat : faux +144% PnL en 48h
+- **Fix** : pattern cash_delta accumulator. Chaque `_exec_*` retourne `SimulatedFill.cash_delta`. `run_one_cycle` somme à travers actifs. Mode `halt_recompute=True` pour recovery après HALT.
+
+### Bug 2 — Compteurs imprécis
+- `n_trades_opened` / `n_trades_closed` incrémentés même quand l'exécution échouait
+- **Fix** : `_exec_*` retournent `tuple[bool, float]` (success + cash_delta). Compteurs incrémentés UNIQUEMENT sur success.
+
+### Bug 3a — Setup identity instable
+- `setup_id` utilisait `h4_indication.bar_index` (position DataFrame, instable quand la rolling window glisse)
+- Conséquence : un même setup recevait plusieurs ids sur des cycles différents
+- **Fix** : `setup_id = (asset, confirmed_at_ts_iso, side)`. `confirmed_at_ts` est un `pd.Timestamp` stable. `position_id` format : `BTC__2026-05-12T14-00-00__BUY`.
+
+### Bug 3b — Open/Close ordering (découvert pendant la re-validation de 3a)
+- Quand un setup avait Open ET Close émis au même cycle, le code traitait tous les Close avant les Open → warnings "unknown position"
+- **Fix** : refactor `_process_asset` pour pair-process les setups ayant les 2 actions.
+
+### Résultats Session 7
+- Dry run propre : Opens=3, Closes=3, Open positions=0, Closed trades=3
+- Final equity $993.31 = $1000 - $6.69 (3 SL/Trailing hits, parfaitement comptabilisés)
+- 321/321 tests verts
+- Voir `docs/RECAPS/BUGS_FOUND.md` (résolution) et `docs/RECAPS/AUDIT_SESSION_7.md`
+
+**Verdict** : bugs critiques résolus, comptabilité du bot fiable.
+
+---
+
+## Session 8 — Backup system + Production launch (14-15 mai 2026)
+
+Préparation pour voyage 10 jours : backup système 3 niveaux et lancement production.
+
+### Backup system 3 niveaux (14 mai soir, commit `c5109c4`)
+- **Niveau 1** : DB persistante (state.db en WAL mode, crash-safe)
+- **Niveau 2** : Snapshots locaux rotatifs (`paper_trading/backups/`, gzip ~88% compression, garde 24 derniers)
+- **Niveau 3** : Backup Telegram automatique toutes les 6h UTC `[0, 6, 12, 18]`
+- 17 tests backup + intégration dans `paper_trader._post_cycle_backup`
+
+### Test B Live #1 (14 mai 22:00 UTC) — bug 4 découvert
+```
+[ERROR] Failed to fetch BTC: limit doit être entre 1 et 1000, reçu 1500
+```
+`ROLLING_BUFFER_SIZE = 1500` dépassait Kraken max (1000).
+**Bug 4 fix** (commit `74023bd`) : `ROLLING_BUFFER_SIZE = 720`. Commentaire fort ajouté pour empêcher future régression.
+
+### Test B Live #2 (15 mai matin) — bug 5 découvert
+Test a tourné 3 cycles MAIS aucun snapshot, aucun Telegram envoyé. Diagnostic : `BackupManager()` par défaut pointait vers `config.STATE_DB_PATH` mais le test utilisait `/tmp/.../state.db`. Fail-soft masquait l'échec.
+**Bug 5 fix** (commit `d250327`) : `live_test_3_cycles.py` injecte explicitement un `BackupManager` scoped au workspace temp.
+
+### Test B Live #3 (15 mai après-midi) — bug 6 découvert
+Snapshots locaux créés ✅. Mais cycle 12:00 UTC n'a PAS envoyé Telegram. Diagnostic : un test manuel à 11:02 UTC avait mis le tracker à `11:02:27Z`. La dédup `< 3600s` skippait silencieusement le scheduled 12:00 UTC (58 min après).
+**Bug 6 fix** (commit `2a7bd58`) :
+- Visibilité : `_post_cycle_backup` log systématiquement le résultat (INFO pour skips attendus, WARNING pour issues)
+- Dédup intelligente : skip ssi "même heure programmée ET même jour UTC"
+
+### Validation finale (15 mai après-midi/soir)
+- `validate_backup_integration.py` : test ciblé full prod path → ✅ snapshot + Telegram + heartbeat reçus
+- Working tree clean, 342/342 tests verts, 22 commits
+- Backup Lexar : ZIP 1.8 MB, 130 fichiers, `.env` exclu ✅
+
+### Lancement PRODUCTION (15 mai 22:00 UTC = 18:00 NY)
+- `scripts/run_production.py` créé (commit `b9ec9c3`) — point d'entrée prod manquait dans `paper_trader.py`
+- Cycle 1 : ✅ 22:00:10 UTC, snapshot `state_2026-05-16T02-00-10.db.gz` (timestamp UTC = 16 mai même si le clock NY dit 15 mai)
+- Bot tourne en boucle infinie depuis
+
+### Validation overnight (16 mai matin)
+- 10 cycles consécutifs sans erreur (02:00 → 11:00 UTC)
+- Cycle 06:00 UTC : ✅ premier backup Telegram automatique en prod réelle (Niveau 3 validé en condition prod)
+- 10 snapshots locaux dans `paper_trading/backups/`
+- 0 trades (ICC sélectif sur 14h, normal)
+- 0 HALT, 0 crash
+
+**Verdict Session 8** : bot en production, 3 niveaux de backup validés, prêt pour le voyage de 10 jours.
+
+---
+
+## Index des bugs résolus (récap)
+
+| # | Bug | Session | Commit |
+|---|---|---|---|
+| 1 | Cash tracking inexistant | 7 | `9c9bd5a` |
+| 2 | Compteurs imprécis | 7 | `c940a5e` |
+| 3a | Setup_id identity instable | 7 | `c940a5e` |
+| 3b | Open/Close ordering | 7 | `c940a5e` |
+| 4 | ROLLING_BUFFER 1500 > Kraken 1000 | 8 | `74023bd` |
+| 5 | BackupManager DB path mismatch (test) | 8 | `d250327` |
+| 6a | Silent skip Telegram | 8 | `2a7bd58` |
+| 6b | Dédup < 3600s trop stricte | 8 | `2a7bd58` |
+
+Voir `docs/RECAPS/BUGS_FOUND.md` pour détails complets.
+
+---
+
+## Statut global du projet (au 16 mai 2026, 11h UTC)
+
+✅ Phase 1 — Données
+✅ Session 2 — Structure ICC
+✅ Session 3 — Order Blocks
+✅ Session 4 — Cycle ICC complet
+✅ Session 5 — Walk-forward 8×12ans (PF 3.22)
+✅ Session 6a — 5 blocs paper trading (211 tests)
+✅ Session 6b — Intégration paper trader (314 tests)
+✅ Session 7 — 4 bugs critiques résolus (321 tests)
+✅ Session 8 — Backup system + Production launch (342 tests)
+🟢 **Bot tourne en production depuis 15 mai 22:00 UTC**
+
+**Tests totaux** : 342/342
+**Commits totaux** : 23
+**Bugs résolus** : 6 (4 + 3a + 3b unifiés)
+**Niveaux de backup** : 3 (DB persistante + snapshots locaux + Telegram cloud)
+
+### Métriques du runtime production
+- Cycles complétés : 10+ (au matin du 16 mai)
+- Snapshots locaux : 10+ accumulés
+- Telegram backups envoyés en prod : 1+ (à 06:00 UTC le 16 mai)
+- Heartbeats envoyés : 0 (1er prévu à 12:00 UTC le 16 mai)
+- HALT alertes : 0
+- Crashes : 0
+
+### Décisions opérationnelles
+- ICC est FROZEN depuis Session 5 (NE JAMAIS modifier `strategies/icc_cycle.py` ni `strategies/icc_structure.py`)
+- `.env` JAMAIS dans les backups (vérifié à chaque backup Lexar)
+- Empirisme > intuition (toujours vérifier par test live, pas par raisonnement)
+- "On prend le temps qu'il faut, deux fois la même erreur = négligence"
+
+### Voyage prévu
+- Départ : 21 mai (5 jours après ce journal)
+- Durée : 10 jours
+- Bot doit tourner en autonomie pendant l'absence
+
+---
+
+*Dernière mise à jour : 16 mai 2026 — Bot en production depuis 14h, 10 cycles propres, voyage J-5*
+

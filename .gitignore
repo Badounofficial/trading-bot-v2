@@ -49,3 +49,13 @@ paper_trading/logs/*.json
 !paper_trading/logs/
 paper_trading/backups/
 paper_trading/.last_telegram_backup
+
+# SQLite WAL mode auxiliary files
+paper_trading/state.db-shm
+paper_trading/state.db-wal
+
+# JSONL logs (paper trader event logs)
+paper_trading/logs/*.jsonl
+
+# Backup files (.bak)
+*.bak
