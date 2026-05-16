@@ -444,3 +444,159 @@ Le 4ème test est le **filet de sécurité absolu** pour la comptabilité du bot
 
 *Document de résolution généré le 14 mai 2026 après-midi.*
 *Tous les bugs critiques documentés ici sont résolus avec tests de régression en place.*
+
+---
+
+# 🛠️ SESSION 8 — Backup system + bugs découverts en production-like (14-15 mai 2026)
+
+Après la résolution des bugs Bug 1-3, Session 8 a ajouté le système de backup 3 niveaux et révélé **3 nouveaux bugs** en condition production-like. Tous documentés ici par souci de traçabilité.
+
+## 🎯 Vue d'ensemble Session 8
+
+| Bug | Status | Commit | Découvert quand |
+|---|---|---|---|
+| **Bug 4** — ROLLING_BUFFER_SIZE > Kraken max | ✅ RÉSOLU | `74023bd` | Test B Live 14 mai (1er essai crash) |
+| **Bug 5** — BackupManager pointe vers paper_trading/state.db au lieu de la temp DB | ✅ RÉSOLU | `d250327` | 15 mai matin (snapshots manquants) |
+| **Bug 6** — Telegram silent skip + dédup `< 3600s` mauvaise | ✅ RÉSOLU | `2a7bd58` | 15 mai après-midi (Telegram pas envoyé) |
+
+---
+
+## 🐛 Bug 4 — ROLLING_BUFFER_SIZE 1500 > Kraken max 1000
+
+### Description
+`config.py` définissait `ROLLING_BUFFER_SIZE = 1500` (intention : "marge de sécurité ×2 sur le minimum 720"). Mais Kraken OHLCV API plafonne à **1000 bars** par requête (gardé explicit par `data_source.py:142`).
+
+### Symptôme au Test B Live (14 mai, ~22:00 UTC)
+```
+[ERROR] Failed to fetch BTC: limit doit être entre 1 et 1000, reçu 1500
+[ERROR] All asset fetches failed — Kraken unreachable?
+```
+Tous les 8 actifs ont échoué. Bot fail-soft (n'a pas crashé) mais aucun trade possible.
+
+### Fix
+`ROLLING_BUFFER_SIZE = 720` (= 30 jours pile = minimum documenté pour ICC, validé empiriquement par `dry_run_48h.py` Session 6b).
+
+Validation empirique post-fix : `daily_lookback=5`, `h4_lookback=3`, `h1_lookback=3` (ICC actuel) avec 720 H1 bars donne 31 Daily / 181 H4 / 720 H1 bars → marge >> 600% sur tous les TF.
+
+Commentaire fort ajouté dans le code : "DO NOT raise this above 1000 without a redesign".
+
+### Pourquoi indétectable offline
+- Tests unitaires mockent `data_source`
+- `dry_run_48h.py` utilise data pré-fetchée (n'appelle pas la garde 1000)
+- Seul un appel **live Kraken** avec `n_bars > 1000` déclenche la garde
+
+→ **Test B Live a fait son boulot.**
+
+---
+
+## 🐛 Bug 5 — BackupManager mismatch entre DB du trader et DB du backup
+
+### Description
+`scripts/live_test_3_cycles.py` créait un `PaperTrader` sans injecter de `backup_manager`. Le default `BackupManager()` pointait vers `config.STATE_DB_PATH` (= `paper_trading/state.db`).
+
+Mais le test utilisait une **DB temp** `/tmp/live_test_XXX/state.db`. Le `paper_trading/state.db` n'existait même pas (production jamais lancée).
+
+### Symptôme (15 mai matin)
+Test B Live de la nuit (14→15 mai) : 3 cycles propres MAIS :
+- `paper_trading/backups/` vide
+- Aucun fichier .gz reçu sur Telegram à 00h UTC
+- `.last_telegram_backup` toujours daté du test manuel (21:58 UTC)
+
+Cause exacte : `_post_cycle_backup` appelait `snapshot()` qui retournait `ok=False, error="DB not found"`. Fail-soft → log warning → bot continue silencieusement. **Bug masqué par la fail-soft.**
+
+### Fix
+Injection explicite d'un `BackupManager` scoped au workspace temp dans `live_test_3_cycles.py` :
+```python
+backup_manager = BackupManager(
+    db_path=db_path,           # Same as StateManager
+    backup_dir=backup_dir,     # Workspace-temp backups
+    telegram_enabled=True,
+)
+trader = PaperTrader(state_manager=sm, backup_manager=backup_manager, ...)
+```
+
+Aussi ajouté : section "Backup snapshots created: N" dans le résumé final pour rendre l'absence de backups VISIBLE.
+
+### Production impact
+**ZÉRO**. En prod (`python -m paper_trading.paper_trader`), les defaults `StateManager()` et `BackupManager()` pointent tous les deux vers `config.STATE_DB_PATH`. Ils s'alignent naturellement.
+
+Le bug était test-specific.
+
+---
+
+## 🐛 Bug 6 — Silent skip Telegram + dédup `< 3600s` trop stricte
+
+### Description
+Deux problèmes liés :
+
+**6a — Silent skip** : `maybe_send_to_telegram` retournait `skipped=True` sans aucun log dans 2 cas (`hour_not_scheduled` et `already_sent_recently`). L'opérateur n'avait **aucune visibilité** sur ce qui se passait.
+
+**6b — Dédup naïve** : la dédup était `(now - last_dt).total_seconds() < 3600` (1h glissante). Conséquence : un test manuel à 11:02 UTC bloquait silencieusement le backup automatique scheduled à 12:00 UTC (57 minutes après).
+
+### Symptôme (15 mai après-midi)
+Test B Live (12-14h UTC) : 3 cycles propres, snapshots locaux OK, MAIS aucun Telegram backup reçu à 12h UTC malgré que `12 ∈ [0, 6, 12, 18]`.
+
+Diagnostic : `cat paper_trading/.last_telegram_backup` affichait `"2026-05-15T11:02:27.529604Z"` (test manuel ce matin-là). Calcul : `12:00 - 11:02 = 58 min < 60 min` → SKIP silencieux.
+
+### Fix (2 changements)
+
+**Fix 6a — Visibilité systématique** dans `paper_trader._post_cycle_backup` :
+- Log **INFO** pour skips attendus (`hour_not_scheduled`, `already_sent_this_hour_today_*`)
+- Log **WARNING** pour skips de config (`telegram_not_configured`, `no_snapshot_available`)
+- Log **WARNING** pour échecs API
+- Success déjà loggé en INFO côté `backup.py`
+
+**Fix 6b — Dédup intelligente** : remplacer `< 3600s` par "même heure programmée + même jour UTC" :
+```python
+if last_dt.date() == now.date() and last_dt.hour == current_hour:
+    return TelegramBackupResult(
+        ok=True, skipped=True,
+        skip_reason=f"already_sent_this_hour_today_{current_hour}",
+    )
+```
+
+Bénéfices :
+- Manual tests à heures non-programmées (11:02, 17:30...) ne bloquent JAMAIS les backups scheduled
+- Redémarrages dans la même heure programmée sont toujours dédup-és
+- Day boundaries respectées (12:00 today ≠ 12:00 yesterday)
+
+### Tests régression ajoutés
+- `test_telegram_does_not_skip_when_previous_backup_was_different_hour` (capture le bug 6b exact)
+- `test_telegram_skips_when_already_sent_for_same_scheduled_hour_after_restart` (anti-régression)
+- `test_telegram_does_send_next_day_even_at_same_hour` (jour boundary)
+- `test_telegram_skip_same_scheduled_hour_same_day` (cas standard)
+
+### Validation empirique
+- Quick test reproduisant exactement le scénario : `ok=True, skipped=False` ✅
+- Test ciblé `validate_backup_integration.py` : full prod path, snapshot créé + Telegram envoyé + heartbeat reçu en parallèle ✅
+
+---
+
+## 📊 Métriques Session 8
+
+| Métrique | Valeur |
+|---|---|
+| Bugs ajoutés (4-6) | 3 |
+| Commits Session 8 | 5 (c5109c4, 04e827b, 74023bd, d250327, 2a7bd58) |
+| Tests ajoutés | +21 (backup module from scratch + 4 dédup + 1 microsec) |
+| Tests verts au final | 342/342 |
+| Niveaux backup actifs | 3 (DB persistante + snapshots locaux + Telegram) |
+
+---
+
+## 🎓 Leçons de Session 8
+
+1. **Le fail-soft policy doit être pair avec de la visibilité.** Sans logs, un échec silencieux est pire qu'un crash : il fait croire que ça marche.
+
+2. **Tester le vrai chemin de production**, pas juste les composants individuels. `validate_backup_integration.py` a prouvé l'intégration en 5 secondes là où `manual_backup_to_telegram.py` ne testait qu'un appel direct.
+
+3. **Les configs "par sécurité" sans vérifier les limites externes** sont un anti-pattern. `ROLLING_BUFFER_SIZE = 1500 "for safety"` dépassait Kraken max. Toujours vérifier les contraintes du système externe.
+
+4. **La dédup naïve par temps glissant a des effets de bord.** "Même heure programmée + même jour" est plus précis et plus prévisible.
+
+5. **Une fenêtre de tests live de 3h vaut mieux qu'aucune.** Bug 4 et Bug 5 auraient mis le bot en panne pendant le voyage. Bug 6 aurait laissé le voyage sans backup cloud.
+
+---
+
+*Document de résolution Session 8 généré le 15 mai 2026 après-midi.*
+*Le bot est prêt pour la production : 342 tests verts, 3 niveaux de backup validés, monitoring Telegram actif.*
