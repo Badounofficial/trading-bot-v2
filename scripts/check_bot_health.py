@@ -70,6 +70,48 @@ def _parse_iso(ts: str | None) -> datetime | None:
         return None
 
 
+# Unicode block characters from low to high (8 levels)
+SPARKLINE_BARS = "▁▂▃▄▅▆▇█"
+
+
+def _build_sparkline(values: list[float]) -> str:
+    """Build a one-line Unicode sparkline from a list of numeric values.
+
+    Returns 8-level bars showing relative position of each value within
+    the min/max range. If all values are identical, returns a flat line
+    of '─' characters.
+    """
+    if not values:
+        return "(no data)"
+    if len(values) == 1:
+        return SPARKLINE_BARS[3]  # mid-level single bar
+
+    vmin = min(values)
+    vmax = max(values)
+    span = vmax - vmin
+
+    if span == 0:
+        # All values identical → flat line
+        return "─" * len(values)
+
+    bars = []
+    n_levels = len(SPARKLINE_BARS) - 1  # 7 (indices 0..7)
+    for v in values:
+        idx = int(round((v - vmin) / span * n_levels))
+        idx = max(0, min(n_levels, idx))  # clamp 0..7
+        bars.append(SPARKLINE_BARS[idx])
+    return "".join(bars)
+
+
+def _compute_volatility(values: list[float]) -> float:
+    """Compute standard deviation. Returns 0.0 if < 2 values."""
+    if len(values) < 2:
+        return 0.0
+    mean = sum(values) / len(values)
+    variance = sum((v - mean) ** 2 for v in values) / len(values)
+    return variance ** 0.5
+
+
 def _read_telegram_tracker() -> str | None:
     """Read last_backup_ts from the tracker file."""
     try:
@@ -132,6 +174,16 @@ def _query_db(db_path: Path) -> dict:
             out["drawdown_pct"] = row[5]
         else:
             out["last_snapshot_ts"] = None
+
+        # Snapshots from the last 24h for the sparkline.
+        # Each cycle = 1 snapshot, so we expect ~24 rows for a healthy bot.
+        cutoff_24h = (datetime.now(timezone.utc) - timedelta(hours=24)).isoformat().replace("+00:00", "Z")
+        cur.execute(
+            "SELECT timestamp, equity FROM equity_snapshots "
+            "WHERE timestamp >= ? ORDER BY timestamp ASC",
+            (cutoff_24h,),
+        )
+        out["last_24h_snapshots"] = cur.fetchall()  # list of (ts, equity)
     finally:
         conn.close()
 
@@ -202,6 +254,25 @@ def main() -> int:
             )
         else:
             print(f"  Invariant (eq=c+ov) : OK (diff ${invariant_diff:.6f})")
+
+    # ── 2.5 Equity sparkline (last 24h) ──
+    snapshots_24h = db_state.get("last_24h_snapshots", [])
+    if snapshots_24h:
+        equities = [row[1] for row in snapshots_24h]
+        sparkline = _build_sparkline(equities)
+        eq_min = min(equities)
+        eq_max = max(equities)
+        eq_start = equities[0]
+        eq_end = equities[-1]
+        eq_delta = eq_end - eq_start
+        eq_delta_pct = (eq_delta / eq_start) if eq_start else 0
+        volatility = _compute_volatility(equities)
+        print(f"\n── Equity over last 24h ──")
+        print(f"  Sparkline       : {sparkline}")
+        print(f"  Min / Max       : ${eq_min:,.2f} / ${eq_max:,.2f}")
+        print(f"  Start / End     : ${eq_start:,.2f} → ${eq_end:,.2f} ({eq_delta:+.2f}, {eq_delta_pct:+.2%})")
+        print(f"  Volatility (σ)  : ${volatility:.2f}")
+        print(f"  Snapshots used  : {len(snapshots_24h)}")
 
     # ── 3. Local backups ──
     backup_dir = config.BACKUPS_DIR
