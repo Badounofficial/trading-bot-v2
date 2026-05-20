@@ -235,6 +235,7 @@ def run_walkforward_asset(
     step_months: int = 3,
     verbose: bool = False,
     sl_mode: str = 'v1_h1_close',
+    apply_friction: bool = True,
 ) -> AssetResult:
     """
     Run walk-forward backtest for one asset.
@@ -275,6 +276,7 @@ def run_walkforward_asset(
                 mode=TradeMode.SWING,
                 verbose=False,
                 sl_mode=sl_mode,
+                apply_friction=apply_friction,
             )
         except Exception as e:
             if verbose:

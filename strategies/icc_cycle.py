@@ -67,6 +67,70 @@ from strategies.icc_orderblocks import (
 
 
 # ============================================================================
+# LIVE-FRICTION MODEL  (added 2026-05 per methodology directive #2)
+# ============================================================================
+# Applied trade-by-trade at close. Subtracted from setup.pnl_pct.
+#
+# 1. Fees: Hyperliquid taker = 4.5 bps/leg. 2 legs minimum (entry + exit),
+#    +1 leg if partial close fired.
+# 2. Slippage (median, bps): asset-tiered per user spec.
+#    Probabilistic: lognormal around the median with sigma=0.5 — so most trades
+#    pay near the median but a few pay 2-3x more (long-tail liquidations).
+# 3. Funding: ~0.001 % per hour held on Hyperliquid perps for the long side
+#    (conservative average — actual funding is paid hourly on HL, varies).
+# 4. Latency drift: implicitly captured inside slippage.
+
+_HL_TAKER_FEE_BPS = 4.5
+_HL_MAKER_FEE_BPS = 1.5   # unused for now (assume taker)
+_SLIPPAGE_BPS_MEDIAN = {
+    'BTC': 3.5, 'ETH': 3.5,
+    'DOT': 11.0, 'AVAX': 11.0, 'LINK': 11.0, 'LTC': 11.0,
+    'ADA': 22.0, 'SOL': 22.0,
+}
+_SLIPPAGE_DEFAULT = 10.0
+_FUNDING_PCT_PER_HOUR = 1e-5   # 0.001 % / h ≈ 0.024 % / day average drag
+
+# Seeded RNG so backtests are reproducible
+import random as _random
+_FRICTION_RNG = _random.Random(20260512)
+
+def _draw_slippage_bps(asset: str) -> float:
+    """Probabilistic slippage in bps. Lognormal around the asset's median."""
+    median = _SLIPPAGE_BPS_MEDIAN.get(asset, _SLIPPAGE_DEFAULT)
+    # mu chosen so that exp(mu) = median
+    import math
+    mu = math.log(max(median, 1e-6))
+    sigma = 0.5  # tail factor — 1 in 20 trades pays >2x the median
+    return max(0.0, float(_FRICTION_RNG.lognormvariate(mu, sigma)))
+
+
+def _apply_friction(setup) -> None:
+    """Apply realistic friction to setup.pnl_pct AFTER it has been computed.
+    Idempotent guard: marks setup with `friction_applied=True` to avoid double-charge.
+    """
+    if getattr(setup, 'friction_applied', False):
+        return
+    if setup.pnl_pct is None:
+        return
+
+    # Number of execution legs paying fee+slippage
+    legs = 3 if setup.partial_closed else 2
+
+    fee_pct = legs * _HL_TAKER_FEE_BPS / 10000.0
+    slip_pct = sum(_draw_slippage_bps(setup.asset) for _ in range(legs)) / 10000.0
+
+    # Funding (charged on the full holding window — applies to perp execution)
+    hours = 0.0
+    if setup.entry_timestamp is not None and setup.exit_timestamp is not None:
+        hours = max(0.0, (setup.exit_timestamp - setup.entry_timestamp).total_seconds() / 3600.0)
+    funding_pct = _FUNDING_PCT_PER_HOUR * hours
+
+    setup.friction_pct = fee_pct + slip_pct + funding_pct
+    setup.pnl_pct -= setup.friction_pct
+    setup.friction_applied = True
+
+
+# ============================================================================
 # ENUMS & TYPES
 # ============================================================================
 
@@ -863,6 +927,11 @@ def _close_setup(
         # Full position exited at this point
         setup.pnl_pct = final_leg_pnl
 
+    # Apply live-execution friction (fees + slippage + funding) if enabled.
+    # Setting is read off the setup itself — propagated by run_icc_cycle.
+    if getattr(setup, '_apply_friction_flag', True):
+        _apply_friction(setup)
+
 
 # ============================================================================
 # MAIN PIPELINE — multi-TF coordination
@@ -882,6 +951,7 @@ def run_icc_cycle(
     min_rr_for_ob_tp: float = 2.5,
     measured_move_rr: float = 3.0,
     sl_mode: str = 'v1_h1_close',
+    apply_friction: bool = True,
 ) -> list[TradeSetup]:
     """
     Run the full ICC cycle on synchronized multi-TF data.
@@ -982,6 +1052,9 @@ def run_icc_cycle(
                     h1_bar=h1_bar, h1_prices=h1_prices,
                 )
                 if new_setup is not None:
+                    # Stamp the friction flag on the setup so _close_setup
+                    # can decide whether to apply friction at exit.
+                    new_setup._apply_friction_flag = apply_friction
                     setups.append(new_setup)
     
     return setups
