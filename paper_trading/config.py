@@ -38,13 +38,12 @@ BACKUPS_DIR.mkdir(parents=True, exist_ok=True)
 #                    .ENV LOADING
 # ════════════════════════════════════════════════════════════════
 
-def _load_env() -> dict:
-    """Load .env file from PROJECT_ROOT into a dict (no external library)."""
-    env_path = PROJECT_ROOT / ".env"
+def _parse_env_file(path: Path) -> dict:
+    """Parse a single .env-style file into a dict. Empty if file missing."""
     out: dict = {}
-    if not env_path.exists():
+    if not path.exists():
         return out
-    with open(env_path, "r", encoding="utf-8") as f:
+    with open(path, "r", encoding="utf-8") as f:
         for line in f:
             line = line.strip()
             if not line or line.startswith("#") or "=" not in line:
@@ -54,6 +53,19 @@ def _load_env() -> dict:
             value = value.strip().strip('"').strip("'")
             out[key] = value
     return out
+
+
+def _load_env() -> dict:
+    """Merge env from multiple locations.
+
+    Order (later overrides earlier):
+      1. ~/.config/badoun/telegram.env  (user-wide credentials, shared with Synapse)
+      2. PROJECT_ROOT/.env              (project-local overrides if any)
+    """
+    merged: dict = {}
+    merged.update(_parse_env_file(Path.home() / ".config" / "badoun" / "telegram.env"))
+    merged.update(_parse_env_file(PROJECT_ROOT / ".env"))
+    return merged
 
 
 _ENV = _load_env()

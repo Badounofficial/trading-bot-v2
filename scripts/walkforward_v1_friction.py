@@ -31,7 +31,19 @@ from strategies.walkforward_icc import (
     run_walkforward_asset, compute_verdict, print_asset_table,
 )
 
-ASSETS = ['BTC', 'ETH', 'SOL', 'ADA', 'AVAX', 'DOT', 'LINK', 'LTC']
+ASSETS_FULL = ['BTC', 'ETH', 'SOL', 'ADA', 'AVAX', 'DOT', 'LINK', 'LTC']
+# Filtered universe after OOS audit (2024-05-20): drop BTC + ADA (loss in both regimes),
+# keep DOT + LINK only on bear regime (loss on bull tape).
+ASSETS_FILTERED = ['ETH', 'LTC', 'AVAX', 'SOL']
+
+# Resolved at runtime via --filter flag
+import argparse
+_argparser = argparse.ArgumentParser()
+_argparser.add_argument('--filter', choices=['full', 'filtered'], default='full',
+                        help='full = 8 assets · filtered = ETH/LTC/AVAX/SOL only')
+_args, _ = _argparser.parse_known_args()
+ASSETS = ASSETS_FILTERED if _args.filter == 'filtered' else ASSETS_FULL
+UNIVERSE_TAG = _args.filter
 CACHE = ROOT / 'cache'
 
 WINDOWS = [
@@ -169,6 +181,7 @@ def run_window(win: dict, apply_friction: bool) -> dict:
 def main():
     ts = datetime.utcnow().strftime('%Y%m%d_%H%M%S')
     print(f"\n{'=' * 80}\n  V1 WALK-FORWARD OOS + FRICTION — RUN {ts}\n{'=' * 80}")
+    print(f"  Universe : {UNIVERSE_TAG.upper()}")
     print(f"  Assets   : {ASSETS}")
     print(f"  Methodo  : Walk-forward (12m train / 6m test / 3m step)")
     print(f"  Friction : fees 4.5 bps × 2 legs + tiered slippage + funding")
@@ -198,7 +211,7 @@ def main():
                   f"{agg['sum_pnl_pp']:>+9.2f} {agg['worst_max_dd_pct']:>6.1f} {agg['sharpe_ann']:>7.2f}")
 
     # Save
-    out_json = ROOT / 'results' / f'walkforward_v1_oos_friction_{ts}.json'
+    out_json = ROOT / 'results' / f'walkforward_v1_oos_friction_{UNIVERSE_TAG}_{ts}.json'
     out_json.write_text(json.dumps(results, indent=2, default=str))
     print(f"\n✓ JSON → {out_json.relative_to(ROOT)}")
 
@@ -246,7 +259,7 @@ def main():
                 f"{ar['pct_windows_profitable']:.0f}% | {ar['trades_per_year']:.1f} |"
             )
         md.append("")
-    out_md = ROOT / 'results' / f'walkforward_v1_oos_friction_{ts}.md'
+    out_md = ROOT / 'results' / f'walkforward_v1_oos_friction_{UNIVERSE_TAG}_{ts}.md'
     out_md.write_text("\n".join(md))
     print(f"✓ MD   → {out_md.relative_to(ROOT)}")
     return results
