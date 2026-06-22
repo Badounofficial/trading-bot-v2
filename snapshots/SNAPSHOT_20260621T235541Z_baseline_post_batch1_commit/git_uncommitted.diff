@@ -1,0 +1,113 @@
+diff --git a/live/README.md b/live/README.md
+index f9c8d1d..a0676b0 100644
+--- a/live/README.md
++++ b/live/README.md
+@@ -51,7 +51,27 @@ echo "Daemon PID wrapper: $!"
+ 
+ Note the wrapper PID. The wrapper itself spawns the actual Python daemon — both will appear in `ps aux | grep paper_funding`.
+ 
+-### Step 3 — Launch the watchdog (production)
++### Step 3 — Launch the OB forward dispatcher (NEW)
++
++This is the new daemon that sends Badoun a daily annotated chart of V2-dynamic OB detections at 12:00 UTC.
++
++```bash
++cd ~/Desktop/trading-bot-v2
++nohup python3 live/ob_forward_dispatcher.py > /tmp/v2_ob_forward.out 2>&1 &
++echo "OB Forward dispatcher PID: $!"
++```
++
++**Important** : launch BEFORE 12:00 UTC of the day. If launched after, the
++first dispatch will be the following day. To force an immediate dispatch
++once, use `--once` ; for a no-Telegram local test, use `--dry-run`.
++
++Verify the daemon will dispatch :
++```bash
++tail -10 live/logs/ob_forward_*.log
++# should show "sleeping <N>s until next dispatch at 2026-MM-DDT12:00:00+00:00"
++```
++
++### Step 4 — Launch the watchdog (production)
+ 
+ In another terminal, also detached :
+ 
+@@ -61,16 +81,17 @@ nohup python live/watchdog.py > /tmp/v2_watchdog.out 2>&1 &
+ echo "Watchdog PID: $!"
+ ```
+ 
+-### Step 4 — Verify both are alive (1 min)
++### Step 5 — Verify all are alive (1 min)
+ 
+ ```bash
+-ps aux | grep -E "paper_funding|watchdog" | grep -v grep
++ps aux | grep -E "paper_funding|watchdog|ob_forward_dispatcher" | grep -v grep
+ ```
+ 
+-You should see **3 processes** :
++You should see **4 processes** :
+ 1. `bash live/run_daemon.sh` (wrapper)
+-2. `caffeinate -i python …` (daemon under caffeinate)
+-3. `python live/watchdog.py`
++2. `caffeinate -i python …` (funding daemon under caffeinate)
++3. `python3 live/watchdog.py`
++4. `python3 live/ob_forward_dispatcher.py` (NEW — OB visual dispatch)
+ 
+ Check the daemon completed its first cycle :
+ ```bash
+diff --git a/paper_trading/monitoring.py b/paper_trading/monitoring.py
+index 3321d72..334b85b 100644
+--- a/paper_trading/monitoring.py
++++ b/paper_trading/monitoring.py
+@@ -193,6 +193,52 @@ class TelegramAlerter:
+             # Defensive : we promised "never raises"
+             return TelegramResult(ok=False, error=f"telegram_unexpected: {e}")
+ 
++    def send_photo(
++        self,
++        photo_path: str,
++        caption: str = "",
++        parse_mode: str = "Markdown",
++    ) -> TelegramResult:
++        """Send a photo (PNG/JPEG) with optional caption via Telegram sendPhoto.
++
++        Used by the OB Forward Detection daemon to push annotated charts.
++        Best-effort — never raises.
++
++        Args:
++            photo_path: absolute path to the image file on disk
++            caption: optional caption, max 1024 chars (Telegram limit)
++            parse_mode: "Markdown" | "HTML" | None
++        """
++        if not self.enabled:
++            return TelegramResult(ok=False, error="telegram_not_configured")
++
++        if caption and len(caption) > 1024:
++            caption = caption[:1020] + "..."
++
++        url = f"{self.BASE_URL}/bot{self.token}/sendPhoto"
++        try:
++            with open(photo_path, "rb") as f:
++                files = {"photo": f}
++                data = {"chat_id": self.chat_id}
++                if caption:
++                    data["caption"] = caption
++                if parse_mode:
++                    data["parse_mode"] = parse_mode
++                r = requests.post(url, data=data, files=files, timeout=self.timeout * 3)
++            if r.status_code == 200:
++                return TelegramResult(ok=True, http_status=200)
++            return TelegramResult(
++                ok=False,
++                http_status=r.status_code,
++                error=f"telegram_photo_http_{r.status_code}: {r.text[:200]}",
++            )
++        except FileNotFoundError:
++            return TelegramResult(ok=False, error=f"telegram_photo_missing_file: {photo_path}")
++        except requests.RequestException as e:
++            return TelegramResult(ok=False, error=f"telegram_photo_network: {e}")
++        except Exception as e:
++            return TelegramResult(ok=False, error=f"telegram_photo_unexpected: {e}")
++
+ 
+ # ════════════════════════════════════════════════════════════════
+ #                    MESSAGE FORMATTERS (Markdown for Telegram)

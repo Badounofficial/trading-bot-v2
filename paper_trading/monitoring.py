@@ -193,6 +193,52 @@ class TelegramAlerter:
             # Defensive : we promised "never raises"
             return TelegramResult(ok=False, error=f"telegram_unexpected: {e}")
 
+    def send_photo(
+        self,
+        photo_path: str,
+        caption: str = "",
+        parse_mode: str = "Markdown",
+    ) -> TelegramResult:
+        """Send a photo (PNG/JPEG) with optional caption via Telegram sendPhoto.
+
+        Used by the OB Forward Detection daemon to push annotated charts.
+        Best-effort — never raises.
+
+        Args:
+            photo_path: absolute path to the image file on disk
+            caption: optional caption, max 1024 chars (Telegram limit)
+            parse_mode: "Markdown" | "HTML" | None
+        """
+        if not self.enabled:
+            return TelegramResult(ok=False, error="telegram_not_configured")
+
+        if caption and len(caption) > 1024:
+            caption = caption[:1020] + "..."
+
+        url = f"{self.BASE_URL}/bot{self.token}/sendPhoto"
+        try:
+            with open(photo_path, "rb") as f:
+                files = {"photo": f}
+                data = {"chat_id": self.chat_id}
+                if caption:
+                    data["caption"] = caption
+                if parse_mode:
+                    data["parse_mode"] = parse_mode
+                r = requests.post(url, data=data, files=files, timeout=self.timeout * 3)
+            if r.status_code == 200:
+                return TelegramResult(ok=True, http_status=200)
+            return TelegramResult(
+                ok=False,
+                http_status=r.status_code,
+                error=f"telegram_photo_http_{r.status_code}: {r.text[:200]}",
+            )
+        except FileNotFoundError:
+            return TelegramResult(ok=False, error=f"telegram_photo_missing_file: {photo_path}")
+        except requests.RequestException as e:
+            return TelegramResult(ok=False, error=f"telegram_photo_network: {e}")
+        except Exception as e:
+            return TelegramResult(ok=False, error=f"telegram_photo_unexpected: {e}")
+
 
 # ════════════════════════════════════════════════════════════════
 #                    MESSAGE FORMATTERS (Markdown for Telegram)

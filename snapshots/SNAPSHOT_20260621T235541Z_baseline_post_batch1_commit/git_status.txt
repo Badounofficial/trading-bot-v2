@@ -1,0 +1,17 @@
+ M live/README.md
+ M paper_trading/monitoring.py
+?? Trading_Bot_V2_Apprentissage_Dossier_v1_obsolete.pdf
+?? Trading_Bot_V2_Pitch_Deck_old.pdf
+?? Trading_Bot_V2_Strategic_Deck_EN.pdf
+?? Trading_Bot_V2_Strategic_Deck_EN.pptx
+?? WEEKLY_RECAPS/
+?? alignment_ob_2026_05_22/
+?? live/ob_forward_dispatcher.py
+?? scripts/build_deck_en.js
+?? scripts/build_ob_alignment.py
+?? scripts/build_ob_alignment_dynamic.py
+?? scripts/com.sebastien.v2.saturday_recap.plist
+?? scripts/generate_saturday_recap.py
+?? scripts/v2_snapshot.sh
+?? snapshots/
+?? strategies/ob_detector_v2_dynamic.py

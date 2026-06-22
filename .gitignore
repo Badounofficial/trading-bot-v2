@@ -76,3 +76,7 @@ lu*.tmp
 
 # Node deps for deck builder (regen via npm install)
 node_modules/
+
+# Defensive: future-proof against sandbox FS leaving stale git lock files.
+# .git/ is git-internal and never tracked anyway, but explicit for intent.
+.git/*.lock

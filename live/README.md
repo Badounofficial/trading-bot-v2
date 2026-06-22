@@ -51,7 +51,27 @@ echo "Daemon PID wrapper: $!"
 
 Note the wrapper PID. The wrapper itself spawns the actual Python daemon — both will appear in `ps aux | grep paper_funding`.
 
-### Step 3 — Launch the watchdog (production)
+### Step 3 — Launch the OB forward dispatcher (NEW)
+
+This is the new daemon that sends Badoun a daily annotated chart of V2-dynamic OB detections at 12:00 UTC.
+
+```bash
+cd ~/Desktop/trading-bot-v2
+nohup python3 live/ob_forward_dispatcher.py > /tmp/v2_ob_forward.out 2>&1 &
+echo "OB Forward dispatcher PID: $!"
+```
+
+**Important** : launch BEFORE 12:00 UTC of the day. If launched after, the
+first dispatch will be the following day. To force an immediate dispatch
+once, use `--once` ; for a no-Telegram local test, use `--dry-run`.
+
+Verify the daemon will dispatch :
+```bash
+tail -10 live/logs/ob_forward_*.log
+# should show "sleeping <N>s until next dispatch at 2026-MM-DDT12:00:00+00:00"
+```
+
+### Step 4 — Launch the watchdog (production)
 
 In another terminal, also detached :
 
@@ -61,16 +81,17 @@ nohup python live/watchdog.py > /tmp/v2_watchdog.out 2>&1 &
 echo "Watchdog PID: $!"
 ```
 
-### Step 4 — Verify both are alive (1 min)
+### Step 5 — Verify all are alive (1 min)
 
 ```bash
-ps aux | grep -E "paper_funding|watchdog" | grep -v grep
+ps aux | grep -E "paper_funding|watchdog|ob_forward_dispatcher" | grep -v grep
 ```
 
-You should see **3 processes** :
+You should see **4 processes** :
 1. `bash live/run_daemon.sh` (wrapper)
-2. `caffeinate -i python …` (daemon under caffeinate)
-3. `python live/watchdog.py`
+2. `caffeinate -i python …` (funding daemon under caffeinate)
+3. `python3 live/watchdog.py`
+4. `python3 live/ob_forward_dispatcher.py` (NEW — OB visual dispatch)
 
 Check the daemon completed its first cycle :
 ```bash
