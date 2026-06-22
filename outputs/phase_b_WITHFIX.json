@@ -1,0 +1,123 @@
+{
+  "assets": [
+    "BTC",
+    "ETH",
+    "SOL"
+  ],
+  "period_start_target": "2025-11-04 00:00:00",
+  "period_end_target": "2026-05-04 00:00:00",
+  "capital_per_asset_usd": 10000.0,
+  "entry_cost_bps": 10.74,
+  "exit_cost_bps": 10.74,
+  "strategy_params": {
+    "smooth_hours": 24,
+    "entry_threshold_apr": 0.005,
+    "exit_threshold_apr": -0.005,
+    "min_hold_hours": 24,
+    "min_flat_hours": 24
+  },
+  "per_asset": [
+    {
+      "n_entries": 28,
+      "n_exits": 28,
+      "n_trades": 28,
+      "total_pnl_usd": -362.641193,
+      "total_return_pct": -3.62641193,
+      "cagr_pct": -7.1828967244861985,
+      "sharpe": -6.422106476202476,
+      "max_dd_pct": -4.086273953434586,
+      "total_costs_usd": 601.44,
+      "cost_drag_pct": 6.0144,
+      "gross_funding_usd": 238.79880699999998,
+      "time_in_position_pct": 73.60184119677791,
+      "win_rate_pct": 7.142857142857142,
+      "avg_trade_pnl_usd": -12.954364321428569,
+      "avg_duration_h": 114.17857142857143,
+      "symbol": "BTC",
+      "n_bars": 4345,
+      "period_start": "2025-11-04 00:00:00",
+      "period_end": "2026-05-04 00:00:00",
+      "diagnostic": {
+        "n_bars": 4345,
+        "time_in_position_pct": 73.60184119677791,
+        "n_entries": 28,
+        "n_exits": 27,
+        "avg_position_duration_bars": 114.21428571428571,
+        "funding_when_in_position_mean": 7.321490900562852e-06,
+        "funding_when_flat_mean": -3.154523016564952e-06
+      }
+    },
+    {
+      "n_entries": 21,
+      "n_exits": 21,
+      "n_trades": 21,
+      "total_pnl_usd": -162.946613,
+      "total_return_pct": -1.6294661300000002,
+      "cagr_pct": -3.260922288344703,
+      "sharpe": -3.3251039346168674,
+      "max_dd_pct": -3.0195186454598644,
+      "total_costs_usd": 451.08000000000004,
+      "cost_drag_pct": 4.510800000000001,
+      "gross_funding_usd": 288.13338699999997,
+      "time_in_position_pct": 78.84925201380898,
+      "win_rate_pct": 9.523809523809524,
+      "avg_trade_pnl_usd": -7.763651428571428,
+      "avg_duration_h": 163.0952380952381,
+      "symbol": "ETH",
+      "n_bars": 4345,
+      "period_start": "2025-11-04 00:00:00",
+      "period_end": "2026-05-04 00:00:00",
+      "diagnostic": {
+        "n_bars": 4345,
+        "time_in_position_pct": 78.84925201380898,
+        "n_entries": 21,
+        "n_exits": 20,
+        "avg_position_duration_bars": 163.14285714285714,
+        "funding_when_in_position_mean": 8.292221599532984e-06,
+        "funding_when_flat_mean": -4.0425871599564744e-06
+      }
+    },
+    {
+      "n_entries": 32,
+      "n_exits": 32,
+      "n_trades": 32,
+      "total_pnl_usd": -607.239641,
+      "total_return_pct": -6.07239641,
+      "cagr_pct": -11.875236357554774,
+      "sharpe": -10.101701102126711,
+      "max_dd_pct": -6.072396410000001,
+      "total_costs_usd": 687.36,
+      "cost_drag_pct": 6.873600000000001,
+      "gross_funding_usd": 80.12035900000001,
+      "time_in_position_pct": 46.09896432681243,
+      "win_rate_pct": 3.125,
+      "avg_trade_pnl_usd": -18.976238781250004,
+      "avg_duration_h": 62.59375,
+      "symbol": "SOL",
+      "n_bars": 4345,
+      "period_start": "2025-11-04 00:00:00",
+      "period_end": "2026-05-04 00:00:00",
+      "diagnostic": {
+        "n_bars": 4345,
+        "time_in_position_pct": 46.09896432681243,
+        "n_entries": 32,
+        "n_exits": 32,
+        "avg_position_duration_bars": 62.59375,
+        "funding_when_in_position_mean": 3.6865514727908142e-06,
+        "funding_when_flat_mean": -1.0417205977796756e-05
+      }
+    }
+  ],
+  "aggregate": {
+    "total_capital_usd": 30000.0,
+    "total_pnl_usd": -1132.8274470000001,
+    "total_costs_usd": 1739.88,
+    "mean_sharpe": -6.616303837648684,
+    "min_sharpe": -10.101701102126711,
+    "max_dd_pct_worst_asset": -6.072396410000001,
+    "sum_n_trades": 81,
+    "mean_win_rate_pct": 6.597222222222221,
+    "mean_time_in_position_pct": 66.18335251246644,
+    "total_return_pct": -3.7760914900000007
+  }
+}
