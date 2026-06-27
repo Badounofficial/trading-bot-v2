@@ -1,0 +1,2 @@
+warning: unable to unlink '/sessions/charming-inspiring-goldberg/mnt/trading-bot-v2/.git/index.lock': Operation not permitted
+?? snapshots/SNAPSHOT_20260622T002253Z_pre-phase-b-baseline/

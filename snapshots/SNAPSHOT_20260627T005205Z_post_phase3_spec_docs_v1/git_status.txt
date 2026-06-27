@@ -1,0 +1,24 @@
+ M PRINCIPLES.md
+?? analysis/
+?? live/state.pre_vps_cutover_backup_25juin_mac_dead/
+?? production/
+?? snapshots/SNAPSHOT_20260622T002253Z_pre-phase-b-baseline/
+?? snapshots/SNAPSHOT_20260622T003348Z_post-phase-b-fix-applied/
+?? snapshots/SNAPSHOT_20260624T213520Z_pre_vps_cutover_phase1/
+?? snapshots/SNAPSHOT_20260625T174725Z_pre_cutover_25juin_mac_dead/
+?? snapshots/SNAPSHOT_20260626T163036Z_pre_loss_forensic_phase1/
+?? snapshots/SNAPSHOT_20260626T165329Z_pre_H4_friction_realistic/
+?? snapshots/SNAPSHOT_20260626T165550Z_post_H4_friction_realistic/
+?? snapshots/SNAPSHOT_20260626T170925Z_pre_H1_min_hold_extended/
+?? snapshots/SNAPSHOT_20260626T171422Z_post_H1_min_hold_extended/
+?? snapshots/SNAPSHOT_20260626T224253Z_pre_H3_asset_filter/
+?? snapshots/SNAPSHOT_20260626T224512Z_post_H3_asset_filter/
+?? snapshots/SNAPSHOT_20260626T224512Z_pre_H6_circuit_breaker/
+?? snapshots/SNAPSHOT_20260626T224826Z_post_H6_circuit_breaker/
+?? snapshots/SNAPSHOT_20260626T232403Z_pre_H2_entry_threshold/
+?? snapshots/SNAPSHOT_20260626T232553Z_post_H2_entry_threshold/
+?? snapshots/SNAPSHOT_20260626T232553Z_pre_H6_robustness/
+?? snapshots/SNAPSHOT_20260626T232754Z_post_H6_robustness/
+?? snapshots/SNAPSHOT_20260627T004802Z_pre_phase3_implementation_baseline/
+?? snapshots/SNAPSHOT_20260627T005205Z_post_phase3_spec_docs_v1/
+?? weekly_reports/
