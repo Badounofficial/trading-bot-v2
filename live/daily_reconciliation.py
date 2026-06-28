@@ -87,7 +87,7 @@ LOG_FILE = LOG_DIR / "daily_reconciliation.log"
 # Set this constant to the actual cutover datetime when Phase 3 goes live.
 # Until then, Day-N counter shows "pre-marathon" / "Day —".
 # Format: ISO 8601 UTC. Example: "2026-07-15T12:00:00+00:00"
-PHASE3_MARATHON_T0 = ""   # to be set at cutover (operator action, hardcode then)
+PHASE3_MARATHON_T0 = "2026-06-28T19:55:15+00:00"
 MARATHON_TOTAL_DAYS = 365
 
 # --- Backtest expected pro-rata (Phase 3 sizing) ----------------------------
