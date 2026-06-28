@@ -182,12 +182,66 @@ def collect_doc_changes(start: datetime, end: datetime) -> list:
         return []
 
 
+def check_ob_forward_health(end: datetime) -> dict:
+    """Phase 3 Safeguard G — verify OB forward dispatcher emitted daily charts.
+
+    Scans live/state/forward_charts/ for subdirectories matching pattern
+    `YYYYMMDD_*` over the past 7 calendar days. Each healthy day should have
+    at least one such directory (the dispatcher creates one timestamped folder
+    per emission, e.g. `20260622_1200UTC`).
+
+    Tolerance: 1 missed day per week is acceptable (occasional API blip /
+    daemon restart). If actual < expected - 1 → warning flag raised.
+
+    Returns dict consumed by format_recap() and send_tldr_telegram().
+    """
+    forward_dir = ROOT / "live" / "state" / "forward_charts"
+    expected = 7
+    if not forward_dir.exists():
+        return {
+            "expected": expected,
+            "actual": 0,
+            "missing_days": ["(directory absent)"],
+            "warning": True,
+            "warning_msg": (
+                f"⚠️ OB forward dispatcher folder missing at "
+                f"{forward_dir.relative_to(ROOT)} — dispatcher may have never run"
+            ),
+        }
+    actual = 0
+    missing = []
+    for day_offset in range(expected):
+        check_date = end.date() - timedelta(days=day_offset)
+        day_str = check_date.strftime("%Y%m%d")
+        matches = list(forward_dir.glob(f"{day_str}_*"))
+        if matches:
+            actual += 1
+        else:
+            missing.append(check_date.isoformat())
+    warning = actual < (expected - 1)   # tolerate 1 miss
+    warning_msg = ""
+    if warning:
+        warning_msg = (
+            f"⚠️ OB forward dispatcher emitted only {actual}/{expected} daily "
+            f"folders past 7 days (missing {', '.join(missing)}). "
+            f"Investigate {forward_dir.relative_to(ROOT)} + dispatcher logs."
+        )
+    return {
+        "expected": expected,
+        "actual": actual,
+        "missing_days": missing,
+        "warning": warning,
+        "warning_msg": warning_msg,
+    }
+
+
 # ============================================================================
 # RECAP FORMATTER
 # ============================================================================
 
 def format_recap(week_start: datetime, week_end: datetime,
-                 git: dict, daemon: dict, paper: dict, files: list) -> str:
+                 git: dict, daemon: dict, paper: dict, files: list,
+                 ob_forward_health: Optional[dict] = None) -> str:
     """Produce the structured Saturday Recap markdown."""
     week_label = week_end.strftime("%Y-%m-%d")
     week_human = f"{week_start.strftime('%b %d')} → {week_end.strftime('%b %d, %Y')}"
@@ -284,6 +338,24 @@ def format_recap(week_start: datetime, week_end: datetime,
     out.append(f"- **Total trade events (cumulative since start)** : {daemon.get('total_trade_events', '?')}")
     out.append("")
 
+    # ----- OB Forward Dispatcher Health (Phase 3 Safeguard G)
+    out.append("## OB Forward Dispatcher Health (Safeguard G)")
+    out.append("")
+    if ob_forward_health is not None:
+        ofh = ob_forward_health
+        status_emoji = "🔴" if ofh.get("warning") else "🟢"
+        out.append(f"- **Daily emissions past 7 days** : "
+                   f"{status_emoji} {ofh.get('actual', 0)}/{ofh.get('expected', 7)}")
+        if ofh.get("missing_days"):
+            missing = ofh["missing_days"]
+            out.append(f"- **Missing days** : {', '.join(missing) if missing else 'none'}")
+        if ofh.get("warning"):
+            out.append("")
+            out.append(f"> {ofh.get('warning_msg', '')}")
+    else:
+        out.append("_(OB forward health check skipped — module not invoked)_")
+    out.append("")
+
     # ----- Layered Inquiry Surprise + Compression Check (manual)
     out.append("## Layered Inquiry — Surprise of the Week")
     out.append("")
@@ -320,7 +392,8 @@ def format_recap(week_start: datetime, week_end: datetime,
 # TELEGRAM TL;DR
 # ============================================================================
 
-def send_tldr_telegram(week_label: str, git: dict, daemon: dict, paper: dict) -> bool:
+def send_tldr_telegram(week_label: str, git: dict, daemon: dict, paper: dict,
+                       ob_forward_health: Optional[dict] = None) -> bool:
     """Send a compact TL;DR via Telegram. Returns success boolean."""
     try:
         from paper_trading.monitoring import TelegramAlerter
@@ -344,6 +417,21 @@ def send_tldr_telegram(week_label: str, git: dict, daemon: dict, paper: dict) ->
     hb_status = "💚 healthy" if (hb_age is not None and hb_age < 1800) else \
                 ("🟡 stale" if (hb_age is not None and hb_age < 7200) else "🔴 offline")
 
+    # Safeguard G — OB forward health line (only shown if degraded)
+    ob_health_line = ""
+    if ob_forward_health and ob_forward_health.get("warning"):
+        ob_health_line = (
+            f"• 🔴 OB forward dispatcher: only "
+            f"{ob_forward_health.get('actual', 0)}/{ob_forward_health.get('expected', 7)} "
+            f"daily emissions (safeguard G warning)\n"
+        )
+    elif ob_forward_health:
+        ob_health_line = (
+            f"• 🟢 OB forward dispatcher: "
+            f"{ob_forward_health.get('actual', 7)}/{ob_forward_health.get('expected', 7)} "
+            f"daily emissions OK\n"
+        )
+
     text = (
         f"📋 *V2 Saturday Recap — week ending {week_label}*\n"
         f"\n"
@@ -352,6 +440,7 @@ def send_tldr_telegram(week_label: str, git: dict, daemon: dict, paper: dict) ->
         f"• Funding accrued: *${funding_week:.4f}*\n"
         f"• Daemon: {hb_status} · cycle {cycle} · {n_positions} positions\n"
         f"• PnL: realized ${realized:.2f} · unrealized ${unrealized:.2f}\n"
+        f"{ob_health_line}"
         f"\n"
         f"Full recap → `WEEKLY_RECAPS/{week_label}_recap.md`"
     )
@@ -383,14 +472,22 @@ def main():
     daemon = collect_daemon_state()
     paper = collect_paper_trading_window(start, end)
     files = collect_doc_changes(start, end)
+    ob_forward_health = check_ob_forward_health(end)   # Phase 3 Safeguard G
+    if ob_forward_health.get("warning"):
+        print(f"[recap] safeguard G warning: {ob_forward_health.get('warning_msg', '')}")
+    else:
+        print(f"[recap] safeguard G OK: {ob_forward_health.get('actual', 0)}/"
+              f"{ob_forward_health.get('expected', 7)} daily emissions")
 
-    md = format_recap(start, end, git, daemon, paper, files)
+    md = format_recap(start, end, git, daemon, paper, files,
+                      ob_forward_health=ob_forward_health)
     out_path = RECAP_DIR / f"{week_label}_recap.md"
     out_path.write_text(md)
     print(f"[recap] wrote {out_path.relative_to(ROOT)} ({len(md)} chars)")
 
     if not args.no_telegram:
-        send_tldr_telegram(week_label, git, daemon, paper)
+        send_tldr_telegram(week_label, git, daemon, paper,
+                           ob_forward_health=ob_forward_health)
 
 
 if __name__ == "__main__":
