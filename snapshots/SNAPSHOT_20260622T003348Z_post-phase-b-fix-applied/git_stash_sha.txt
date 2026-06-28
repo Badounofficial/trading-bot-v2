@@ -1,0 +1,9 @@
+warning: unable to unlink '/sessions/charming-inspiring-goldberg/mnt/trading-bot-v2/.git/index.lock': Operation not permitted
+warning: unable to unlink '.git/objects/6d/tmp_obj_ahKOq5': Operation not permitted
+fatal: Unable to create '/sessions/charming-inspiring-goldberg/mnt/trading-bot-v2/.git/index.lock': File exists.
+
+Another git process seems to be running in this repository, e.g.
+an editor opened by 'git commit'. Please make sure all processes
+are terminated then try again. If it still fails, a git process
+may have crashed in this repository earlier:
+remove the file manually to continue.

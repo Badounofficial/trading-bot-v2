@@ -1,0 +1,6 @@
+mindcompletionbody  7940   0.0  0.0 435276832   6752   ??  SN   Sun08PM   0:00.59 /Library/Developer/CommandLineTools/Library/Frameworks/Python3.framework/Versions/3.9/Resources/Python.app/Contents/MacOS/Python live/watchdog.py
+mindcompletionbody  1533   0.0  0.2 435402224  41824   ??  SN   Sat08PM   2:13.69 /Library/Developer/CommandLineTools/Library/Frameworks/Python3.framework/Versions/3.9/Resources/Python.app/Contents/MacOS/Python /Users/mindcompletionbody/Desktop/trading-bot-v2/live/paper_funding_capture.py
+mindcompletionbody  1535   0.0  0.0 435301120    640   ??  SN   Sat08PM   0:00.00 caffeinate -i python3 /Users/mindcompletionbody/Desktop/trading-bot-v2/live/paper_funding_capture.py
+mindcompletionbody  1523   0.0  0.1 435515552  16688   ??  SN   Sat08PM   0:04.70 /Library/Developer/CommandLineTools/Library/Frameworks/Python3.framework/Versions/3.9/Resources/Python.app/Contents/MacOS/Python live/ob_forward_dispatcher.py
+mindcompletionbody  1522   0.0  0.0 435300208    528   ??  SN   Sat08PM   0:00.02 bash live/run_daemon.sh
+root               354   0.0  0.0 435305088   3376   ??  Ss   Sat07PM   0:11.19 /usr/libexec/watchdogd

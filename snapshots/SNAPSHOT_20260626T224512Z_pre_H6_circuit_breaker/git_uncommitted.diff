@@ -1,0 +1,87 @@
+diff --git a/PRINCIPLES.md b/PRINCIPLES.md
+index e86c173..8ca3751 100644
+--- a/PRINCIPLES.md
++++ b/PRINCIPLES.md
+@@ -207,6 +207,62 @@ discretionary buffer based on observed stop-out rate in paper trading.
+ 
+ ---
+ 
++### P15 — Backup-Before-Action / Reversibility Discipline
++
++Toute action qui modifie un état doit être précédée d'un checkpoint
++explicite permettant le retour. **Pas de rollback = pas d'action.**
++
++Cross-reference : Synapse Principle 31 — codifiée par Sebastien le
++21 juin 2026, adoptée transversalement sur tous les projets.
++
++Application V2 :
++- Git commit propre AVANT toute modification de stratégie, config
++  trading, ou paramètre PnL-sensitive
++- `bash scripts/v2_snapshot.sh <label>` AVANT toute modif `live/state/*`,
++  `strategies/*.py`, `paper_trading/*.py`. Capture : git HEAD + status
++  + diff + stash + branch + daemon_state + heartbeat + trades.jsonl
++  + processes ps + ROLLBACK.md procédure 5-step embedded
++- Snapshots persistés dans `snapshots/SNAPSHOT_<UTC_TS>_<label>/`,
++  jamais purgés sans approval explicite
++- Paper mode validation 24h MINIMUM avant tout déploiement live ou
++  changement de paramètres PnL-impact
++- JAMAIS d'exécution de trade order live sans confirmation explicite
++  opérateur (déjà règle existante via guardrail financial-actions,
++  renforcée par P15)
++- Pour migration VPS Hetzner : dry-run 24h en parallèle Mac AVANT
++  cutover live, jamais de big bang. Cutover atomique <5 min hors
++  funding hours UTC, snapshot pre/post obligatoire, rollback procedure
++  documentée et testée AVANT cutover
++
++### P16 — Weekly Reports Append-Only
++
++Chaque dimanche (ou prochaine interaction après dimanche), V2 écrit un
++weekly report dans `~/Desktop/trading-bot-v2/weekly_reports/` avec
++naming `weekly_report_YYYY-MM-DD.md` (date = dimanche de fin de semaine
++UTC). **Append-only** : jamais écrasé, chaque dimanche = nouveau fichier.
++
++Format standardisé en 7 sections :
++1. Summary (2-3 phrases) — état live + sprint progress
++2. Key metrics — equity (realized + funding accrued), open positions,
++   cycle count + uptime, funding events bookés
++3. Actions completed — commits + sprints, bullets
++4. Issues / Blockers
++5. Plans next week
++6. P15/P31 compliance — `v2_snapshot.sh` runs (count + labels),
++   branches actives
++7. Memorable phrase / quote
++
++Codifié par Sebastien (via Dispatch) le 23 juin 2026 — protocole
++transversal aux agents. Premier report V2 : `weekly_report_2026-06-22.md`
++(semaine 16-22 juin, audit lookahead-fix + migration VPS Phase 1).
++
++Operationalization : V2 génère le report autonomement le dimanche soir
++ou à la première interaction post-dimanche. Le fichier est commité
++dans le repo via le batch commit hebdomadaire. Les fichiers passés sont
++préservés intacts (append-only).
++
++---
++
+ ## Version History
+ 
+ - **v1.0** — 23 May 2026 — initial codification (P1-P6, project-specific)
+@@ -231,8 +287,17 @@ discretionary buffer based on observed stop-out rate in paper trading.
+   adjustable upward if stop-out rate observed stays tight). Q27
+   resolved. Predicted stop-out rate ETH : 35-45% (old) → 22-32% (new),
+   expected delta ~-10 to -15 pp. **Phase 1 buffer table now FINAL**.
++- **v1.7** — 21 June 2026 — added P15 (Backup-Before-Action /
++  Reversibility Discipline = Synapse Principle 31). Mechanism :
++  `scripts/v2_snapshot.sh` captures git + daemon state + processes
++  with ROLLBACK.md embedded. First baseline snapshot landed in commit
++  `c4daa19`.
++- **v1.8** — 23 June 2026 — added P16 (Weekly Reports Append-Only).
++  Protocol codified by Sebastien via Dispatch. First V2 report :
++  `weekly_reports/weekly_report_2026-06-22.md` covering week 16-22 June
++  (audit lookahead-fix Phase A+B + migration VPS Phase 1 + 4 commits).
+ 
+ ---
+ 
+-*Last reviewed: 29 May 2026 by V2 (Cowork). Next review: Saturday
+-31 May 2026 (first Saturday Recap).*
++*Last reviewed: 23 June 2026 by V2 (Cowork). Next review: Sunday
++28 June 2026 (next Weekly Report cycle).*
