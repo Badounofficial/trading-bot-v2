@@ -1,0 +1,298 @@
+{
+  "full": {
+    "BTC_24": {
+      "n_trades": 53.0,
+      "total_pnl": 2518.073998,
+      "gross_funding": 3578.073998,
+      "total_cost": 1060.0,
+      "expectancy": 47.51096450943396,
+      "sharpe": 14.896387709960614,
+      "max_dd_pct": -2.9272972181877708,
+      "win_rate": 28.30188679245283,
+      "time_in_pos": 90.84878048780489,
+      "avg_duration_h": 351.3962243081761,
+      "cagr": 10.081954668900739
+    },
+    "BTC_36": {
+      "n_trades": 51.0,
+      "total_pnl": 2542.64935,
+      "gross_funding": 3562.6493499999997,
+      "total_cost": 1020.0,
+      "expectancy": 49.85600923529413,
+      "sharpe": 15.298963609846693,
+      "max_dd_pct": -2.6936485535078316,
+      "win_rate": 29.411764705882355,
+      "time_in_pos": 91.46829268292683,
+      "avg_duration_h": 367.6666631753813,
+      "cagr": 10.174332322357538
+    },
+    "BTC_48": {
+      "n_trades": 46.0,
+      "total_pnl": 2640.8866110000004,
+      "gross_funding": 3560.886611000001,
+      "total_cost": 920.0,
+      "expectancy": 57.410733304347815,
+      "sharpe": 16.620789673838587,
+      "max_dd_pct": -2.3852157222186134,
+      "win_rate": 32.608695652173914,
+      "time_in_pos": 92.33658536585367,
+      "avg_duration_h": 411.4999985386472,
+      "cagr": 10.54257090037014
+    },
+    "BTC_60": {
+      "n_trades": 41.0,
+      "total_pnl": 2738.982989,
+      "gross_funding": 3558.9829890000005,
+      "total_cost": 820.0,
+      "expectancy": 66.80463682926829,
+      "sharpe": 18.11239317732618,
+      "max_dd_pct": -1.7549100101877138,
+      "win_rate": 36.58536585365854,
+      "time_in_pos": 93.0829268292683,
+      "avg_duration_h": 465.41463489837406,
+      "cagr": 10.908650718709412
+    },
+    "ETH_24": {
+      "n_trades": 71.0,
+      "total_pnl": 1828.680189,
+      "gross_funding": 3248.680189,
+      "total_cost": 1420.0,
+      "expectancy": 25.754704225352107,
+      "sharpe": 9.617515669112906,
+      "max_dd_pct": -2.8032067947929264,
+      "win_rate": 28.169014084507044,
+      "time_in_pos": 86.22926829268293,
+      "avg_duration_h": 248.97183455007823,
+      "cagr": 7.447015263862844
+    },
+    "ETH_36": {
+      "n_trades": 67.0,
+      "total_pnl": 1905.703973,
+      "gross_funding": 3245.7039730000006,
+      "total_cost": 1340.0,
+      "expectancy": 28.441907223880598,
+      "sharpe": 10.291148644212441,
+      "max_dd_pct": -2.676622700026591,
+      "win_rate": 29.850746268656714,
+      "time_in_pos": 86.97073170731707,
+      "avg_duration_h": 266.1044811691542,
+      "cagr": 7.7456965696501845
+    },
+    "ETH_48": {
+      "n_trades": 63.0,
+      "total_pnl": 1982.443179,
+      "gross_funding": 3242.443179,
+      "total_cost": 1260.0,
+      "expectancy": 31.46582523809523,
+      "sharpe": 11.007571512228358,
+      "max_dd_pct": -2.2130706521470636,
+      "win_rate": 31.746031746031743,
+      "time_in_pos": 87.7609756097561,
+      "avg_duration_h": 285.57143131393286,
+      "cagr": 8.04217659893014
+    },
+    "ETH_60": {
+      "n_trades": 56.0,
+      "total_pnl": 2115.356456,
+      "gross_funding": 3235.356456,
+      "total_cost": 1120.0,
+      "expectancy": 37.77250476785714,
+      "sharpe": 12.40422177984,
+      "max_dd_pct": -1.9088108217503377,
+      "win_rate": 35.714285714285715,
+      "time_in_pos": 88.91219512195121,
+      "avg_duration_h": 325.48214484623014,
+      "cagr": 8.553123721960976
+    },
+    "COMBINED_24": {
+      "n_trades": 124.0,
+      "total_pnl": 4346.754187,
+      "gross_funding": 6826.7541870000005,
+      "total_cost": 2480.0,
+      "expectancy": 35.05446925
+    },
+    "COMBINED_36": {
+      "n_trades": 118.0,
+      "total_pnl": 4448.353323,
+      "gross_funding": 6808.353323,
+      "total_cost": 2360.0,
+      "expectancy": 37.69790951694915
+    },
+    "COMBINED_48": {
+      "n_trades": 109.0,
+      "total_pnl": 4623.329790000001,
+      "gross_funding": 6803.329790000001,
+      "total_cost": 2180.0,
+      "expectancy": 42.415869633027526
+    },
+    "COMBINED_60": {
+      "n_trades": 97.0,
+      "total_pnl": 4854.339445,
+      "gross_funding": 6794.3394450000005,
+      "total_cost": 1940.0,
+      "expectancy": 50.044736546391746
+    }
+  },
+  "oos": {
+    "BTC_24": {
+      "n_trades": 40.0,
+      "total_pnl": 141.79134399999998,
+      "gross_funding": 941.7913440000001,
+      "total_cost": 800.0,
+      "expectancy": 3.544961625000002,
+      "sharpe": 1.4695594072938223,
+      "max_dd_pct": -3.588567162664115,
+      "win_rate": 17.5,
+      "time_in_pos": 84.5937813440321,
+      "avg_duration_h": 210.82499894444445,
+      "cagr": 1.2468796200670207
+    },
+    "BTC_36": {
+      "n_trades": 38.0,
+      "total_pnl": 170.29426199999997,
+      "gross_funding": 930.294262,
+      "total_cost": 760.0,
+      "expectancy": 4.481615342105264,
+      "sharpe": 1.8101528844537536,
+      "max_dd_pct": -3.301234939671685,
+      "win_rate": 18.421052631578945,
+      "time_in_pos": 85.74724172517553,
+      "avg_duration_h": 224.94736719298243,
+      "cagr": 1.4972744387173664
+    },
+    "BTC_48": {
+      "n_trades": 34.0,
+      "total_pnl": 246.776556,
+      "gross_funding": 926.776556,
+      "total_cost": 680.0,
+      "expectancy": 7.258343441176469,
+      "sharpe": 2.7687772689769226,
+      "max_dd_pct": -2.9262023473616927,
+      "win_rate": 20.588235294117645,
+      "time_in_pos": 87.17151454363089,
+      "avg_duration_h": 255.58823524509802,
+      "cagr": 2.1687475666640976
+    },
+    "BTC_60": {
+      "n_trades": 29.0,
+      "total_pnl": 349.2653250000001,
+      "gross_funding": 929.2653250000001,
+      "total_cost": 580.0,
+      "expectancy": 12.043877448275861,
+      "sharpe": 4.232356611207999,
+      "max_dd_pct": -2.1514130144966495,
+      "win_rate": 24.137931034482758,
+      "time_in_pos": 88.62587763289869,
+      "avg_duration_h": 304.65517198275865,
+      "cagr": 3.067602754752219
+    },
+    "ETH_24": {
+      "n_trades": 41.0,
+      "total_pnl": 80.54861199999999,
+      "gross_funding": 900.548612,
+      "total_cost": 820.0,
+      "expectancy": 1.9622542195121957,
+      "sharpe": 0.8265696891718298,
+      "max_dd_pct": -2.684702567096842,
+      "win_rate": 21.951219512195124,
+      "time_in_pos": 80.62186559679037,
+      "avg_duration_h": 196.0243907520325,
+      "cagr": 0.708583583431488
+    },
+    "ETH_36": {
+      "n_trades": 38.0,
+      "total_pnl": 141.97149199999996,
+      "gross_funding": 901.9714919999999,
+      "total_cost": 760.0,
+      "expectancy": 3.733560605263157,
+      "sharpe": 1.511746434019551,
+      "max_dd_pct": -2.2767324742752035,
+      "win_rate": 23.684210526315788,
+      "time_in_pos": 81.72517552657975,
+      "avg_duration_h": 214.39473820906434,
+      "cagr": 1.2484624639661268
+    },
+    "ETH_48": {
+      "n_trades": 37.0,
+      "total_pnl": 159.468513,
+      "gross_funding": 899.4685129999999,
+      "total_cost": 740.0,
+      "expectancy": 4.307360108108109,
+      "sharpe": 1.7202413640738607,
+      "max_dd_pct": -2.062938394705474,
+      "win_rate": 24.324324324324326,
+      "time_in_pos": 82.58776328986961,
+      "avg_duration_h": 222.51351379129127,
+      "cagr": 1.4021814139081101
+    },
+    "ETH_60": {
+      "n_trades": 35.0,
+      "total_pnl": 189.50756899999996,
+      "gross_funding": 889.507569,
+      "total_cost": 700.0,
+      "expectancy": 5.411753714285718,
+      "sharpe": 2.100623084001801,
+      "max_dd_pct": -1.9072779959613335,
+      "win_rate": 25.71428571428571,
+      "time_in_pos": 83.7111334002006,
+      "avg_duration_h": 238.42857151587305,
+      "cagr": 1.6660136308773277
+    },
+    "COMBINED_24": {
+      "n_trades": 81.0,
+      "total_pnl": 222.33995599999997,
+      "gross_funding": 1842.3399560000003,
+      "total_cost": 1620.0,
+      "expectancy": 2.7449377283950613
+    },
+    "COMBINED_36": {
+      "n_trades": 76.0,
+      "total_pnl": 312.2657539999999,
+      "gross_funding": 1832.265754,
+      "total_cost": 1520.0,
+      "expectancy": 4.108759921052631
+    },
+    "COMBINED_48": {
+      "n_trades": 71.0,
+      "total_pnl": 406.245069,
+      "gross_funding": 1826.245069,
+      "total_cost": 1420.0,
+      "expectancy": 5.721761535211267
+    },
+    "COMBINED_60": {
+      "n_trades": 64.0,
+      "total_pnl": 538.7728940000001,
+      "gross_funding": 1818.7728940000002,
+      "total_cost": 1280.0,
+      "expectancy": 8.418326468750001
+    }
+  },
+  "trivial_benchmark_full": {
+    "BTC": {
+      "n_trades": 1.0,
+      "total_pnl": 3541.300106,
+      "gross_funding": 3561.300106,
+      "total_cost": 20.0,
+      "expectancy": 3541.3072270000002,
+      "sharpe": 56.659719182323194,
+      "max_dd_pct": -0.14666715915246628,
+      "win_rate": 100.0,
+      "time_in_pos": 100.0,
+      "avg_duration_h": 20499.999901944444,
+      "cagr": 13.84402529876212
+    },
+    "ETH": {
+      "n_trades": 1.0,
+      "total_pnl": 3149.4716049999997,
+      "gross_funding": 3169.4716049999997,
+      "total_cost": 20.0,
+      "expectancy": 3149.375416,
+      "sharpe": 55.25755171135819,
+      "max_dd_pct": -0.2711194920804723,
+      "win_rate": 100.0,
+      "time_in_pos": 100.0,
+      "avg_duration_h": 20499.999901944444,
+      "cagr": 12.423285472400725
+    }
+  }
+}

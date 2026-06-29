@@ -1,0 +1,82 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+.venv
+
+# Data caches (too large for git, kept locally + backed up to external)
+cache/*.parquet
+cache/*.csv
+cache/*.json
+
+# Results
+results/*.json
+results/*.csv
+
+# Backups
+backups/
+*.zip
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Environment
+.env
+*.local
+
+# Logs
+*.log
+logs/
+
+# Paper trading state and logs
+paper_trading/state.db
+paper_trading/logs/*.log
+paper_trading/logs/*.json
+!paper_trading/logs/.gitkeep
+!paper_trading/logs/
+paper_trading/backups/
+paper_trading/.last_telegram_backup
+
+# SQLite WAL mode auxiliary files
+paper_trading/state.db-shm
+paper_trading/state.db-wal
+
+# JSONL logs (paper trader event logs)
+paper_trading/logs/*.jsonl
+
+# Backup files (.bak)
+*.bak
+
+# Live paper trading runtime artifacts
+live/state/
+live/logs/
+
+# LibreOffice / Office transient lock files
+.~lock.*#
+
+# QA / smoke test artifacts (intermediate, regenerable)
+_dossier_tmp.html
+slide-*.jpg
+qa_en_v2/
+lu*.tmp
+*.tmp
+
+# Node deps for deck builder (regen via npm install)
+node_modules/
+
+# Defensive: future-proof against sandbox FS leaving stale git lock files.
+# .git/ is git-internal and never tracked anyway, but explicit for intent.
+.git/*.lock

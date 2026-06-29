@@ -1,0 +1,37 @@
+# Trading Bot v2 — Configuration
+# All parameters in one place. Edit here, never hardcode values in scripts.
+
+exchange:
+  name: hyperliquid       # hyperliquid | bybit | binance
+  symbols:
+    - BTC/USDC:USDC
+    - ETH/USDC:USDC
+    - SOL/USDC:USDC
+
+data:
+  start_date: '2024-01-01'
+  end_date: '2026-04-30'
+  cache_dir: cache/
+  funding_timeframe: '1h'  # auto-detected, just a hint
+
+friction:
+  # Calibrated empirically from historical bid-ask (Corwin-Schultz, 2y of data)
+  slippage_median_bps: 0.87
+  slippage_sigma: 0.88
+  taker_fee_bps: 4.5       # Hyperliquid taker fee (perp)
+  maker_fee_bps: 1.5       # Hyperliquid maker fee (perp)
+  use_maker_orders: false
+
+strategy:
+  name: funding_capture
+  capital_per_symbol_usd: 10000
+  smooth_hours: 24         # rolling mean window for funding signal
+  entry_threshold_apr: 0.005   # 0.5% APR — enter on any meaningful positive funding
+  exit_threshold_apr: -0.005   # -0.5% APR — exit only on meaningful negative
+  min_hold_hours: 24
+  min_flat_hours: 24
+
+notifications:
+  enabled: true            # set false to disable Telegram
+  on_milestones: true
+  on_errors: true

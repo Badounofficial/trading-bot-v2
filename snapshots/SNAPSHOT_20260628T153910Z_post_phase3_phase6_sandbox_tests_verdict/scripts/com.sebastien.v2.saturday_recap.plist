@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.sebastien.v2.saturday_recap</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>-lc</string>
+    <string>cd "$HOME/Desktop/trading-bot-v2" &amp;&amp; /usr/bin/env python3 scripts/generate_saturday_recap.py</string>
+  </array>
+
+  <!--
+    Run every Saturday at 05:05 local time.
+    During PDT (Mar–Nov): 05:05 PDT = 12:05 UTC ✓
+    During PST (Nov–Mar): 05:05 PST = 13:05 UTC (1h late — acceptable for weekly)
+    The 5-min buffer past noon UTC guarantees daemon heartbeat captured for the day.
+  -->
+  <key>StartCalendarInterval</key>
+  <dict>
+    <key>Weekday</key>
+    <integer>6</integer>
+    <key>Hour</key>
+    <integer>5</integer>
+    <key>Minute</key>
+    <integer>5</integer>
+  </dict>
+
+  <key>StandardOutPath</key>
+  <string>/tmp/v2_saturday_recap.out</string>
+  <key>StandardErrorPath</key>
+  <string>/tmp/v2_saturday_recap.err</string>
+
+  <key>RunAtLoad</key>
+  <false/>
+</dict>
+</plist>
