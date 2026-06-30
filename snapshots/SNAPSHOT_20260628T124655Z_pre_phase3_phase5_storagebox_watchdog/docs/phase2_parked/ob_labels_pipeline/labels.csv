@@ -1,2 +1,0 @@
-label_id,timestamp_utc,asset,tf,ob_type,direction,push_candles,reverse_candles_before,fvg_present,fvg_within_n_candles,engulfing,created_swing,session,comment,screenshot_path,validation
-1,,,,,,,,,,,,,EXEMPLE — remplace cette ligne par ton premier label,,
